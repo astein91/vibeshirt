@@ -1,8 +1,22 @@
 import { ImageResponse } from "next/og";
 import { createServiceClient } from "@/lib/supabase/server";
 
+export const runtime = "nodejs";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
+
+async function fetchImageAsDataUrl(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const buffer = await res.arrayBuffer();
+    const contentType = res.headers.get("content-type") || "image/png";
+    const base64 = Buffer.from(buffer).toString("base64");
+    return `data:${contentType};base64,${base64}`;
+  } catch {
+    return null;
+  }
+}
 
 export default async function OGImage({
   params,
@@ -21,26 +35,7 @@ export default async function OGImage({
       .single();
 
     if (!session) {
-      return new ImageResponse(
-        (
-          <div
-            style={{
-              width: "100%",
-              height: "100%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              backgroundColor: "#0f172a",
-              color: "white",
-              fontSize: 48,
-              fontWeight: 800,
-            }}
-          >
-            Vibeshirt
-          </div>
-        ),
-        { ...size }
-      );
+      return fallbackImage();
     }
 
     const { data: artifacts } = await supabase
@@ -58,6 +53,16 @@ export default async function OGImage({
     const appUrl =
       process.env.NEXT_PUBLIC_APP_URL || "https://vibeshirt-seven.vercel.app";
     const mockupUrl = `${appUrl}/mockups/bella-canvas-3001-front.png`;
+
+    // Pre-fetch images as data URLs (required for Satori in serverless)
+    const [mockupDataUrl, artworkDataUrl] = await Promise.all([
+      fetchImageAsDataUrl(mockupUrl),
+      artifact ? fetchImageAsDataUrl(artifact.storage_url) : null,
+    ]);
+
+    if (!mockupDataUrl) {
+      return fallbackImage();
+    }
 
     return new ImageResponse(
       (
@@ -82,15 +87,15 @@ export default async function OGImage({
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={mockupUrl}
+              src={mockupDataUrl}
               width={460}
               height={560}
               alt=""
             />
-            {artifact && (
+            {artworkDataUrl && (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={artifact.storage_url}
+                src={artworkDataUrl}
                 alt=""
                 width={186}
                 height={226}
@@ -165,25 +170,29 @@ export default async function OGImage({
     );
   } catch (e) {
     console.error("OG image generation failed:", e);
-    return new ImageResponse(
-      (
-        <div
-          style={{
-            width: "100%",
-            height: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            backgroundColor: "#0f172a",
-            color: "white",
-            fontSize: 48,
-            fontWeight: 800,
-          }}
-        >
-          Vibeshirt
-        </div>
-      ),
-      { ...size }
-    );
+    return fallbackImage();
   }
+}
+
+function fallbackImage() {
+  return new ImageResponse(
+    (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "#0f172a",
+          color: "white",
+          fontSize: 48,
+          fontWeight: 800,
+        }}
+      >
+        Vibeshirt
+      </div>
+    ),
+    { ...size }
+  );
 }

@@ -1,11 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, use } from "react";
+import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { useArtifacts } from "@/hooks/useArtifacts";
-import { usePrintfulMockup } from "@/hooks/usePrintfulMockup";
 import { PhotoMockup } from "@/components/design/PhotoMockup";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -49,8 +48,6 @@ export default function SharePage({ params }: PageProps) {
   const [selectedColor, setSelectedColor] = useState<PrintfulColor | null>(null);
   const [colors, setColors] = useState<PrintfulColor[]>([]);
 
-  const { generateMockup, mockups, isGenerating: isMockupGenerating } = usePrintfulMockup();
-  const mockupGeneratedForRef = useRef<string | null>(null);
 
   // Fetch session by share slug
   useEffect(() => {
@@ -99,24 +96,7 @@ export default function SharePage({ params }: PageProps) {
   }, []);
 
   const sessionId = session?.id;
-  const { artifacts, latestArtifact, latestNormalized } = useArtifacts(sessionId || null);
-
-  // Auto-trigger Printful mockup when normalized artifact exists
-  useEffect(() => {
-    if (
-      latestNormalized &&
-      latestNormalized.id !== mockupGeneratedForRef.current &&
-      !isMockupGenerating
-    ) {
-      mockupGeneratedForRef.current = latestNormalized.id;
-      generateMockup({
-        productId: PRODUCT_ID,
-        variantIds: [],
-        imageUrl: latestNormalized.storage_url,
-        placement: "front",
-      });
-    }
-  }, [latestNormalized, isMockupGenerating, generateMockup]);
+  const { artifacts, latestArtifact } = useArtifacts(sessionId || null);
 
   const designState = session?.design_state || DEFAULT_DESIGN_STATE;
   const displayArtifact = selectedArtifact
@@ -177,8 +157,6 @@ export default function SharePage({ params }: PageProps) {
     );
   }
 
-  const mockupUrl = mockups?.[0]?.imageUrl;
-
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
       {/* Header */}
@@ -213,48 +191,31 @@ export default function SharePage({ params }: PageProps) {
 
         {/* Product mockup */}
         <div className="w-full max-w-lg">
-          {/* Show Printful mockup if available, otherwise show PhotoMockup with design overlay */}
           <div className="relative bg-white rounded-xl shadow-sm p-6">
-            {mockupUrl ? (
-              <div className="relative aspect-square w-full rounded-lg overflow-hidden">
-                <Image
-                  src={mockupUrl}
-                  alt="Product mockup"
-                  fill
-                  className="object-contain"
-                  unoptimized
-                />
-              </div>
-            ) : isMockupGenerating ? (
-              <Skeleton className="aspect-square w-full rounded-lg" />
-            ) : (
-              <PhotoMockup
-                color={productColor}
-                productImage={productImage}
-                view="front"
-                className="w-full"
-              >
-                {displayArtifact && (
+            <PhotoMockup
+              color={productColor}
+              productImage={productImage}
+              view="front"
+              className="w-full"
+            >
+              {displayArtifact && (
+                <div className="relative w-full h-full">
                   <div
-                    className="relative w-full h-full"
+                    className="absolute inset-0 flex items-center justify-center"
+                    style={{
+                      transform: designStateToTransform(designState),
+                    }}
                   >
-                    <div
-                      className="absolute inset-0 flex items-center justify-center"
-                      style={{
-                        transform: designStateToTransform(designState),
-                      }}
-                    >
-                      <Image
-                        src={displayArtifact.storage_url}
-                        alt={displayArtifact.prompt || "Design"}
-                        fill
-                        className="object-contain pointer-events-none"
-                      />
-                    </div>
+                    <Image
+                      src={displayArtifact.storage_url}
+                      alt={displayArtifact.prompt || "Design"}
+                      fill
+                      className="object-contain pointer-events-none"
+                    />
                   </div>
-                )}
-              </PhotoMockup>
-            )}
+                </div>
+              )}
+            </PhotoMockup>
           </div>
 
           {/* Color swatches */}

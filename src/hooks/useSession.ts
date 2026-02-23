@@ -73,8 +73,27 @@ export function useSession(sessionId: string | null) {
   );
 
   const makePublic = useCallback(async () => {
-    return updateSession({ is_public: true } as Partial<Session>);
-  }, [updateSession]);
+    if (!sessionId) return;
+
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isPublic: true }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to make session public");
+      }
+
+      const data = await response.json();
+      setSession(data);
+      return data;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+      throw err;
+    }
+  }, [sessionId]);
 
   return {
     session,

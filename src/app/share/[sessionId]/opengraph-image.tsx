@@ -1,5 +1,6 @@
 import { ImageResponse } from "next/og";
 import { createServiceClient } from "@/lib/supabase/server";
+import { migrateDesignState } from "@/lib/design-state";
 
 export const runtime = "nodejs";
 export const size = { width: 1200, height: 630 };
@@ -8,15 +9,15 @@ export const contentType = "image/png";
 // Must match PRINT_AREA in PhotoMockup.tsx
 const PRINT_AREA_FRONT = { top: 0.24, left: 0.30, width: 0.40, height: 0.45 };
 
-// Mockup image dimensions within the OG image
-const MOCKUP_W = 460;
-const MOCKUP_H = 560;
-const CONTAINER_W = 580;
-const CONTAINER_H = 630;
+// Mockup fills the full OG image height with padding
+const MOCKUP_H = 610;
+const MOCKUP_W = Math.round(MOCKUP_H * (460 / 560)); // maintain aspect ratio
+const IMG_W = size.width;
+const IMG_H = size.height;
 
-// Mockup image offset (centered in container)
-const MOCKUP_LEFT = Math.round((CONTAINER_W - MOCKUP_W) / 2);
-const MOCKUP_TOP = Math.round((CONTAINER_H - MOCKUP_H) / 2);
+// Mockup centered in the full image
+const MOCKUP_LEFT = Math.round((IMG_W - MOCKUP_W) / 2);
+const MOCKUP_TOP = Math.round((IMG_H - MOCKUP_H) / 2);
 
 // Print area in absolute pixels
 const PA_LEFT = MOCKUP_LEFT + Math.round(MOCKUP_W * PRINT_AREA_FRONT.left);
@@ -35,13 +36,6 @@ async function fetchImageAsDataUrl(url: string): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-interface DesignState {
-  x: number;
-  y: number;
-  scale: number;
-  rotation: number;
 }
 
 export default async function OGImage({
@@ -64,44 +58,108 @@ export default async function OGImage({
       return fallbackImage();
     }
 
+    // Migrate design state to multi-layer format
+    const multiState = migrateDesignState(session.design_state);
+    const frontLayers = multiState.front;
+
     const { data: artifacts } = await supabase
       .from("artifacts")
-      .select("storage_url, type, prompt")
+      .select("id, storage_url, type, prompt")
       .eq("session_id", session.id)
       .in("type", ["NORMALIZED", "GENERATED"])
       .order("created_at", { ascending: false })
-      .limit(5);
-
-    const artifact =
-      artifacts?.find((a) => a.type === "NORMALIZED") ||
-      artifacts?.find((a) => a.type === "GENERATED");
+      .limit(10);
 
     const appUrl =
       process.env.NEXT_PUBLIC_APP_URL || "https://vibeshirt-seven.vercel.app";
     const mockupUrl = `${appUrl}/mockups/bella-canvas-3001-front.png`;
 
-    // Pre-fetch images as data URLs (required for Satori in serverless)
-    const [mockupDataUrl, artworkDataUrl] = await Promise.all([
-      fetchImageAsDataUrl(mockupUrl),
-      artifact ? fetchImageAsDataUrl(artifact.storage_url) : null,
-    ]);
+    // Determine which artwork images to fetch
+    const artworkUrlsToFetch: Array<{ url: string; artifactId: string }> = [];
+    if (frontLayers.length > 0) {
+      for (const layer of frontLayers) {
+        const artifact = artifacts?.find((a) => a.id === layer.artifactId);
+        if (artifact) {
+          artworkUrlsToFetch.push({ url: artifact.storage_url, artifactId: artifact.id });
+        }
+      }
+      // If layer has empty artifactId (migrated from old format), use latest artifact
+      if (artworkUrlsToFetch.length === 0 && frontLayers.some((l) => !l.artifactId)) {
+        const fallbackArtifact =
+          artifacts?.find((a) => a.type === "NORMALIZED") ||
+          artifacts?.find((a) => a.type === "GENERATED");
+        if (fallbackArtifact) {
+          artworkUrlsToFetch.push({ url: fallbackArtifact.storage_url, artifactId: fallbackArtifact.id });
+        }
+      }
+    } else {
+      // No layers - use latest artifact
+      const artifact =
+        artifacts?.find((a) => a.type === "NORMALIZED") ||
+        artifacts?.find((a) => a.type === "GENERATED");
+      if (artifact) {
+        artworkUrlsToFetch.push({ url: artifact.storage_url, artifactId: artifact.id });
+      }
+    }
 
+    // Fetch mockup and all artwork images
+    const mockupDataUrl = await fetchImageAsDataUrl(mockupUrl);
     if (!mockupDataUrl) {
       return fallbackImage();
     }
 
-    // Apply design state (default: centered, scale 1)
-    const ds: DesignState = session.design_state || { x: 50, y: 50, scale: 1, rotation: 0 };
+    const artworkDataUrls: Array<{ dataUrl: string; artifactId: string }> = [];
+    for (const { url, artifactId } of artworkUrlsToFetch) {
+      const dataUrl = await fetchImageAsDataUrl(url);
+      if (dataUrl) {
+        artworkDataUrls.push({ dataUrl, artifactId });
+      }
+    }
 
-    // Artwork size: fit within ~80% of print area, then apply scale
-    const artW = Math.round(PA_WIDTH * 0.8 * ds.scale);
-    const artH = Math.round(PA_HEIGHT * 0.8 * ds.scale);
+    // Build positioned artwork elements
+    const artworkElements: Array<{
+      dataUrl: string;
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }> = [];
 
-    // Position artwork center based on design state x/y (% of print area)
-    const artCenterX = PA_LEFT + (ds.x / 100) * PA_WIDTH;
-    const artCenterY = PA_TOP + (ds.y / 100) * PA_HEIGHT;
-    const artLeft = Math.round(artCenterX - artW / 2);
-    const artTop = Math.round(artCenterY - artH / 2);
+    if (frontLayers.length > 0) {
+      for (const layer of frontLayers) {
+        const artData = artworkDataUrls.find((a) => a.artifactId === layer.artifactId)
+          || artworkDataUrls[0]; // fallback for migrated empty artifactId
+        if (!artData) continue;
+
+        const ds = layer.designState;
+        const artW = Math.round(PA_WIDTH * 0.8 * ds.scale);
+        const artH = Math.round(PA_HEIGHT * 0.8 * ds.scale);
+        const artCenterX = PA_LEFT + (ds.x / 100) * PA_WIDTH;
+        const artCenterY = PA_TOP + (ds.y / 100) * PA_HEIGHT;
+
+        artworkElements.push({
+          dataUrl: artData.dataUrl,
+          left: Math.round(artCenterX - artW / 2),
+          top: Math.round(artCenterY - artH / 2),
+          width: artW,
+          height: artH,
+        });
+      }
+    } else if (artworkDataUrls.length > 0) {
+      // No layers - render single artwork centered
+      const artW = Math.round(PA_WIDTH * 0.8);
+      const artH = Math.round(PA_HEIGHT * 0.8);
+      const artCenterX = PA_LEFT + 0.5 * PA_WIDTH;
+      const artCenterY = PA_TOP + 0.5 * PA_HEIGHT;
+
+      artworkElements.push({
+        dataUrl: artworkDataUrls[0].dataUrl,
+        left: Math.round(artCenterX - artW / 2),
+        top: Math.round(artCenterY - artH / 2),
+        width: artW,
+        height: artH,
+      });
+    }
 
     return new ImageResponse(
       (
@@ -110,98 +168,51 @@ export default async function OGImage({
             width: "100%",
             height: "100%",
             display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             backgroundColor: "#f1f5f9",
+            position: "relative",
           }}
         >
-          {/* Left: T-shirt mockup */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={mockupDataUrl}
+            width={MOCKUP_W}
+            height={MOCKUP_H}
+            alt=""
+          />
+          {artworkElements.map((art, i) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={i}
+              src={art.dataUrl}
+              alt=""
+              width={art.width}
+              height={art.height}
+              style={{
+                position: "absolute",
+                top: art.top,
+                left: art.left,
+              }}
+            />
+          ))}
+          {/* Small branding badge */}
           <div
             style={{
-              width: CONTAINER_W,
-              height: CONTAINER_H,
+              position: "absolute",
+              bottom: 16,
+              right: 24,
               display: "flex",
               alignItems: "center",
-              justifyContent: "center",
-              position: "relative",
+              backgroundColor: "rgba(15, 23, 42, 0.75)",
+              color: "white",
+              padding: "6px 16px",
+              borderRadius: 8,
+              fontSize: 16,
+              fontWeight: 700,
             }}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={mockupDataUrl}
-              width={MOCKUP_W}
-              height={MOCKUP_H}
-              alt=""
-            />
-            {artworkDataUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={artworkDataUrl}
-                alt=""
-                width={artW}
-                height={artH}
-                style={{
-                  position: "absolute",
-                  top: artTop,
-                  left: artLeft,
-                }}
-              />
-            )}
-          </div>
-
-          {/* Right: Text */}
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "center",
-              paddingLeft: 20,
-              paddingRight: 50,
-              flex: 1,
-            }}
-          >
-            <div
-              style={{
-                fontSize: 42,
-                fontWeight: 800,
-                color: "#0f172a",
-              }}
-            >
-              Vibeshirt
-            </div>
-            {session.vibe_description ? (
-              <div
-                style={{
-                  fontSize: 24,
-                  color: "#475569",
-                  marginTop: 16,
-                  lineHeight: 1.4,
-                }}
-              >
-                {session.vibe_description}
-              </div>
-            ) : null}
-            <div
-              style={{
-                fontSize: 18,
-                color: "#94a3b8",
-                marginTop: 24,
-              }}
-            >
-              AI-designed custom t-shirt
-            </div>
-            <div
-              style={{
-                marginTop: 32,
-                backgroundColor: "#0f172a",
-                color: "white",
-                padding: "12px 28px",
-                borderRadius: 10,
-                fontSize: 18,
-                fontWeight: 600,
-                display: "flex",
-              }}
-            >
-              Remix This Design
-            </div>
+            vibeshirt.com
           </div>
         </div>
       ),

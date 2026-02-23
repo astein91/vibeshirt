@@ -69,6 +69,22 @@ export default function DesignSessionPage({ params }: PageProps) {
     localStorage.setItem(getDesignStateKey(sessionId), JSON.stringify(designState));
   }, [sessionId, designState]);
 
+  // Debounced save of design state to DB (for share page)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      fetch(`/api/sessions/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ designState }),
+      }).catch(() => {}); // Fire-and-forget
+    }, 1000);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [sessionId, designState]);
+
   // Auto-send vibe description from homepage as first message
   useEffect(() => {
     if (

@@ -82,6 +82,9 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     if (body.status !== undefined) {
       updateData.status = body.status;
     }
+    if (body.designState !== undefined) {
+      updateData.design_state = body.designState;
+    }
 
     if (body.isPublic !== undefined) {
       updateData.is_public = body.isPublic;

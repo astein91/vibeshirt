@@ -1,17 +1,17 @@
 "use client";
 
-import { useState, useEffect, useCallback, use } from "react";
+import { useState, useEffect, useRef, use } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useMessages } from "@/hooks/useMessages";
+import Image from "next/image";
 import { useArtifacts } from "@/hooks/useArtifacts";
-import { ChatContainer } from "@/components/chat/ChatContainer";
-import { NamePrompt } from "@/components/chat/NamePrompt";
-import { InteractiveCanvas } from "@/components/design/InteractiveCanvas";
+import { usePrintfulMockup } from "@/hooks/usePrintfulMockup";
+import { PhotoMockup } from "@/components/design/PhotoMockup";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserMenu } from "@/components/auth/UserMenu";
-import { DesignState, DEFAULT_DESIGN_STATE } from "@/lib/design-state";
+import { DesignState, DEFAULT_DESIGN_STATE, designStateToTransform } from "@/lib/design-state";
 
 interface Session {
   id: string;
@@ -19,46 +19,53 @@ interface Session {
   is_public: boolean;
   share_slug: string;
   vibe_description: string | null;
+  design_state: DesignState | null;
+}
+
+interface PrintfulColor {
+  name: string;
+  hex: string;
+  hex2: string | null;
+  variantIds: number[];
+  image: string;
 }
 
 interface PageProps {
   params: Promise<{ sessionId: string }>;
 }
 
+const PRODUCT_ID = 71; // Bella+Canvas 3001
+
 export default function SharePage({ params }: PageProps) {
   const { sessionId: shareSlug } = use(params);
+  const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [userName, setUserName] = useState<string | null>(null);
+  const [isForking, setIsForking] = useState(false);
   const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
-  const [designState, setDesignState] = useState<DesignState>(DEFAULT_DESIGN_STATE);
+  const [productImage, setProductImage] = useState<string>("");
+  const [productColor, setProductColor] = useState<string>("#FFFFFF");
+  const [selectedColor, setSelectedColor] = useState<PrintfulColor | null>(null);
+  const [colors, setColors] = useState<PrintfulColor[]>([]);
 
-  const handleDesignStateChange = useCallback((newState: DesignState) => {
-    setDesignState(newState);
-  }, []);
+  const { generateMockup, mockups, isGenerating: isMockupGenerating } = usePrintfulMockup();
+  const mockupGeneratedForRef = useRef<string | null>(null);
 
   // Fetch session by share slug
   useEffect(() => {
     async function fetchSession() {
       try {
-        // First, we need to find the session by share slug
         const response = await fetch(`/api/sessions?shareSlug=${shareSlug}`);
         if (!response.ok) {
-          if (response.status === 404) {
-            setError("Session not found");
-          } else {
-            setError("Failed to load session");
-          }
+          setError(response.status === 404 ? "Session not found" : "Failed to load session");
           return;
         }
         const data = await response.json();
-
         if (!data || data.error) {
           setError("This session is not publicly shared");
           return;
         }
-
         setSession(data);
       } catch {
         setError("Failed to load session");
@@ -66,43 +73,78 @@ export default function SharePage({ params }: PageProps) {
         setIsLoading(false);
       }
     }
-
     fetchSession();
   }, [shareSlug]);
 
-  const sessionId = session?.id;
-
-  const { messages, isLoading: messagesLoading, isSending, sendMessage } = useMessages(
-    sessionId || null
-  );
-  const { artifacts, latestArtifact } = useArtifacts(sessionId || null);
-
-  // Load saved username from localStorage
+  // Fetch product data for rendering
   useEffect(() => {
-    if (sessionId) {
-      const saved = localStorage.getItem(`vibeshirt-name-${sessionId}`);
-      if (saved) {
-        setUserName(saved);
+    async function fetchProduct() {
+      try {
+        const response = await fetch(`/api/printful/products/${PRODUCT_ID}`);
+        if (response.ok) {
+          const data = await response.json();
+          setColors(data.colors || []);
+          const white = data.colors?.find((c: PrintfulColor) => c.name === "White") || data.colors?.[0];
+          if (white) {
+            setSelectedColor(white);
+            setProductImage(white.image);
+            setProductColor(white.hex);
+          }
+        }
+      } catch {
+        // Fall back to defaults
       }
     }
-  }, [sessionId]);
+    fetchProduct();
+  }, []);
 
-  const handleNameSubmit = (name: string) => {
-    setUserName(name);
-    if (sessionId) {
-      localStorage.setItem(`vibeshirt-name-${sessionId}`, name);
+  const sessionId = session?.id;
+  const { artifacts, latestArtifact, latestNormalized } = useArtifacts(sessionId || null);
+
+  // Auto-trigger Printful mockup when normalized artifact exists
+  useEffect(() => {
+    if (
+      latestNormalized &&
+      latestNormalized.id !== mockupGeneratedForRef.current &&
+      !isMockupGenerating
+    ) {
+      mockupGeneratedForRef.current = latestNormalized.id;
+      generateMockup({
+        productId: PRODUCT_ID,
+        variantIds: [],
+        imageUrl: latestNormalized.storage_url,
+        placement: "front",
+      });
     }
-  };
+  }, [latestNormalized, isMockupGenerating, generateMockup]);
 
-  const handleSendMessage = async (content: string) => {
-    if (!userName || !sessionId) return;
-    await sendMessage(content, userName);
-  };
-
-  // Get display artifact
+  const designState = session?.design_state || DEFAULT_DESIGN_STATE;
   const displayArtifact = selectedArtifact
     ? artifacts.find((a) => a.id === selectedArtifact)
     : latestArtifact;
+
+  const handleFork = async () => {
+    if (!sessionId) return;
+    setIsForking(true);
+    try {
+      const response = await fetch("/api/sessions/fork", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceSessionId: sessionId }),
+      });
+      if (!response.ok) throw new Error("Failed to remix");
+      const newSession = await response.json();
+      router.push(`/design/${newSession.id}`);
+    } catch {
+      setIsForking(false);
+    }
+  };
+
+  const handleColorSelect = (color: PrintfulColor) => {
+    setSelectedColor(color);
+    setProductImage(color.image);
+    setProductColor(color.hex);
+  };
 
   if (isLoading) {
     return (
@@ -135,87 +177,153 @@ export default function SharePage({ params }: PageProps) {
     );
   }
 
+  const mockupUrl = mockups?.[0]?.imageUrl;
+
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-gray-50">
       {/* Header */}
-      <header className="border-b px-4 py-3 flex items-center justify-between">
+      <header className="border-b bg-white px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Link href="/" className="font-bold text-lg">
             Vibeshirt
           </Link>
-          <Badge variant="secondary">Shared Session</Badge>
-          <Badge variant="outline">{session.status}</Badge>
+          <Badge variant="secondary">Shared Design</Badge>
         </div>
         <div className="flex items-center gap-2">
-          <Link href="/">
-            <Button variant="outline" size="sm">
-              Start Your Own
-            </Button>
-          </Link>
+          <Button
+            onClick={handleFork}
+            disabled={isForking}
+            size="sm"
+          >
+            {isForking ? "Creating..." : "Remix This Design"}
+          </Button>
           <UserMenu />
         </div>
       </header>
 
-      {/* Shared session banner */}
-      {session.vibe_description && (
-        <div className="bg-muted/50 px-4 py-2 text-sm text-center">
-          <span className="text-muted-foreground">Vibe: </span>
-          <span className="font-medium">{session.vibe_description}</span>
-        </div>
-      )}
-
-      {/* Main content */}
-      <div className="flex-1 flex flex-col lg:flex-row">
-        {/* Design preview panel */}
-        <div className="lg:w-1/2 border-b lg:border-b-0 lg:border-r p-6 flex flex-col overflow-auto">
-          <div className="flex-1 flex items-center justify-center">
-            <InteractiveCanvas
-              artifact={displayArtifact ? {
-                id: displayArtifact.id,
-                type: displayArtifact.type,
-                storage_url: displayArtifact.storage_url,
-                prompt: displayArtifact.prompt,
-                metadata: displayArtifact.metadata as Record<string, unknown>,
-              } : null}
-              designState={designState}
-              onDesignStateChange={handleDesignStateChange}
-              recentArtifacts={artifacts
-                .filter((a) => a.type === "GENERATED" || a.type === "NORMALIZED")
-                .map((a) => ({
-                  id: a.id,
-                  type: a.type,
-                  storage_url: a.storage_url,
-                  prompt: a.prompt,
-                  metadata: a.metadata as Record<string, unknown>,
-                }))}
-              onArtifactSelect={(a) => setSelectedArtifact(a.id)}
-            />
+      {/* Main content - centered preview */}
+      <div className="flex-1 flex flex-col items-center justify-center p-6 gap-8 max-w-4xl mx-auto w-full">
+        {/* Vibe description */}
+        {session.vibe_description && (
+          <div className="text-center">
+            <p className="text-sm text-muted-foreground mb-1">Design vibe</p>
+            <p className="text-lg font-medium">{session.vibe_description}</p>
           </div>
+        )}
+
+        {/* Product mockup */}
+        <div className="w-full max-w-lg">
+          {/* Show Printful mockup if available, otherwise show PhotoMockup with design overlay */}
+          <div className="relative bg-white rounded-xl shadow-sm p-6">
+            {mockupUrl ? (
+              <div className="relative aspect-square w-full rounded-lg overflow-hidden">
+                <Image
+                  src={mockupUrl}
+                  alt="Product mockup"
+                  fill
+                  className="object-contain"
+                  unoptimized
+                />
+              </div>
+            ) : isMockupGenerating ? (
+              <Skeleton className="aspect-square w-full rounded-lg" />
+            ) : (
+              <PhotoMockup
+                color={productColor}
+                productImage={productImage}
+                view="front"
+                className="w-full"
+              >
+                {displayArtifact && (
+                  <div
+                    className="relative w-full h-full"
+                  >
+                    <div
+                      className="absolute inset-0 flex items-center justify-center"
+                      style={{
+                        transform: designStateToTransform(designState),
+                      }}
+                    >
+                      <Image
+                        src={displayArtifact.storage_url}
+                        alt={displayArtifact.prompt || "Design"}
+                        fill
+                        className="object-contain pointer-events-none"
+                      />
+                    </div>
+                  </div>
+                )}
+              </PhotoMockup>
+            )}
+          </div>
+
+          {/* Color swatches */}
+          {colors.length > 0 && (
+            <div className="flex flex-wrap justify-center gap-1.5 mt-4">
+              {colors.slice(0, 12).map((color) => (
+                <button
+                  key={color.name}
+                  onClick={() => handleColorSelect(color)}
+                  className={`w-7 h-7 rounded-full border-2 transition-all hover:scale-110 ${
+                    selectedColor?.name === color.name
+                      ? "border-primary ring-2 ring-primary/30 scale-110"
+                      : "border-gray-200 hover:border-gray-400"
+                  }`}
+                  style={{
+                    backgroundColor: color.hex,
+                    boxShadow: color.hex.toUpperCase() === "#FFFFFF"
+                      ? "inset 0 0 0 1px rgba(0,0,0,0.1)"
+                      : undefined,
+                  }}
+                  title={color.name}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Design thumbnails */}
+          {artifacts.filter((a) => a.type === "GENERATED" || a.type === "NORMALIZED").length > 1 && (
+            <div className="flex justify-center gap-2 mt-4">
+              {artifacts
+                .filter((a) => a.type === "GENERATED" || a.type === "NORMALIZED")
+                .slice(0, 5)
+                .map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => setSelectedArtifact(a.id)}
+                    className={`w-12 h-12 rounded border-2 overflow-hidden transition-all ${
+                      displayArtifact?.id === a.id
+                        ? "border-primary"
+                        : "border-muted hover:border-muted-foreground"
+                    }`}
+                  >
+                    <Image
+                      src={a.storage_url}
+                      alt=""
+                      width={48}
+                      height={48}
+                      className="object-cover"
+                    />
+                  </button>
+                ))}
+            </div>
+          )}
         </div>
 
-        {/* Chat panel */}
-        <div className="lg:w-1/2 flex flex-col min-h-[400px] lg:min-h-0">
-          <ChatContainer
-            messages={messages}
-            artifacts={artifacts.map((a) => ({
-              id: a.id,
-              type: a.type,
-              storage_url: a.storage_url,
-              prompt: a.prompt,
-            }))}
-            isLoading={messagesLoading || isSending}
-            userName={userName || ""}
-            onSendMessage={handleSendMessage}
-            onArtifactClick={(a) => setSelectedArtifact(a.id)}
-          />
+        {/* CTA */}
+        <div className="text-center space-y-3">
+          <Button
+            onClick={handleFork}
+            disabled={isForking}
+            size="lg"
+          >
+            {isForking ? "Creating your remix..." : "Remix This Design"}
+          </Button>
+          <p className="text-sm text-muted-foreground">
+            Create your own version of this design with AI
+          </p>
         </div>
       </div>
-
-      {/* Name prompt modal */}
-      <NamePrompt
-        open={!userName}
-        onSubmit={handleNameSubmit}
-      />
     </div>
   );
 }

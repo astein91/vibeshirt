@@ -5,6 +5,25 @@ export const runtime = "nodejs";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
+// Must match PRINT_AREA in PhotoMockup.tsx
+const PRINT_AREA_FRONT = { top: 0.24, left: 0.30, width: 0.40, height: 0.45 };
+
+// Mockup image dimensions within the OG image
+const MOCKUP_W = 460;
+const MOCKUP_H = 560;
+const CONTAINER_W = 580;
+const CONTAINER_H = 630;
+
+// Mockup image offset (centered in container)
+const MOCKUP_LEFT = Math.round((CONTAINER_W - MOCKUP_W) / 2);
+const MOCKUP_TOP = Math.round((CONTAINER_H - MOCKUP_H) / 2);
+
+// Print area in absolute pixels
+const PA_LEFT = MOCKUP_LEFT + Math.round(MOCKUP_W * PRINT_AREA_FRONT.left);
+const PA_TOP = MOCKUP_TOP + Math.round(MOCKUP_H * PRINT_AREA_FRONT.top);
+const PA_WIDTH = Math.round(MOCKUP_W * PRINT_AREA_FRONT.width);
+const PA_HEIGHT = Math.round(MOCKUP_H * PRINT_AREA_FRONT.height);
+
 async function fetchImageAsDataUrl(url: string): Promise<string | null> {
   try {
     const res = await fetch(url);
@@ -18,6 +37,13 @@ async function fetchImageAsDataUrl(url: string): Promise<string | null> {
   }
 }
 
+interface DesignState {
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+}
+
 export default async function OGImage({
   params,
 }: {
@@ -29,7 +55,7 @@ export default async function OGImage({
 
     const { data: session } = await supabase
       .from("design_sessions")
-      .select("id, vibe_description")
+      .select("id, vibe_description, design_state")
       .eq("share_slug", shareSlug)
       .eq("is_public", true)
       .single();
@@ -64,6 +90,19 @@ export default async function OGImage({
       return fallbackImage();
     }
 
+    // Apply design state (default: centered, scale 1)
+    const ds: DesignState = session.design_state || { x: 50, y: 50, scale: 1, rotation: 0 };
+
+    // Artwork size: fit within ~80% of print area, then apply scale
+    const artW = Math.round(PA_WIDTH * 0.8 * ds.scale);
+    const artH = Math.round(PA_HEIGHT * 0.8 * ds.scale);
+
+    // Position artwork center based on design state x/y (% of print area)
+    const artCenterX = PA_LEFT + (ds.x / 100) * PA_WIDTH;
+    const artCenterY = PA_TOP + (ds.y / 100) * PA_HEIGHT;
+    const artLeft = Math.round(artCenterX - artW / 2);
+    const artTop = Math.round(artCenterY - artH / 2);
+
     return new ImageResponse(
       (
         <div
@@ -77,8 +116,8 @@ export default async function OGImage({
           {/* Left: T-shirt mockup */}
           <div
             style={{
-              width: 580,
-              height: 630,
+              width: CONTAINER_W,
+              height: CONTAINER_H,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -88,8 +127,8 @@ export default async function OGImage({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={mockupDataUrl}
-              width={460}
-              height={560}
+              width={MOCKUP_W}
+              height={MOCKUP_H}
               alt=""
             />
             {artworkDataUrl && (
@@ -97,12 +136,12 @@ export default async function OGImage({
               <img
                 src={artworkDataUrl}
                 alt=""
-                width={186}
-                height={226}
+                width={artW}
+                height={artH}
                 style={{
                   position: "absolute",
-                  top: 151,
-                  left: 197,
+                  top: artTop,
+                  left: artLeft,
                 }}
               />
             )}

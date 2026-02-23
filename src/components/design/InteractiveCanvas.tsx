@@ -10,12 +10,18 @@ import {
   Move,
   RotateCcw,
   Maximize2,
+  X,
+  Plus,
 } from "lucide-react";
 import {
-  DesignState,
+  type DesignState,
+  type MultiSideDesignState,
+  type Layer,
   DEFAULT_DESIGN_STATE,
   applyPositionCommand,
   designStateToTransform,
+  updateLayerDesignState,
+  removeLayerFromSide,
 } from "@/lib/design-state";
 import { PhotoMockup } from "./PhotoMockup";
 
@@ -30,9 +36,9 @@ interface Artifact {
 interface PrintfulColor {
   name: string;
   hex: string;
-  hex2: string | null; // Secondary color for heathers
+  hex2: string | null;
   variantIds: number[];
-  image: string; // Color-specific product image from Printful
+  image: string;
 }
 
 interface PrintArea {
@@ -61,27 +67,20 @@ interface MockupPreview {
 }
 
 interface InteractiveCanvasProps {
-  artifact: Artifact | null;
+  multiState: MultiSideDesignState;
+  allArtifacts: Artifact[];
+  onMultiStateChange: (state: MultiSideDesignState) => void;
+  onRemoveLayer: (layerId: string) => void;
+  onAddLayerRequest?: () => void;
   isLoading?: boolean;
-  designState: DesignState;
-  onDesignStateChange: (state: DesignState) => void;
-  onArtifactSelect?: (artifact: Artifact) => void;
-  recentArtifacts?: Artifact[];
   onColorChange?: (color: PrintfulColor) => void;
-  onProductChange?: (productId: number) => void;
   onPrintAreaChange?: (printArea: PrintArea) => void;
   mockupPreview?: MockupPreview | null;
   isMockupLoading?: boolean;
 }
 
-// Curated list of popular t-shirt products from Printful
-const PRODUCTS = [
-  { id: 71, name: "Bella+Canvas 3001", description: "Unisex Staple Tee" },
-  { id: 380, name: "Gildan 5000", description: "Men's Staple Tee" },
-  { id: 586, name: "Stanley/Stella", description: "Organic Cotton Tee" },
-];
+const PRODUCT_ID = 71; // Bella+Canvas 3001
 
-// Fallback colors if API fails
 const FALLBACK_COLORS: PrintfulColor[] = [
   { name: "White", hex: "#FFFFFF", hex2: null, variantIds: [], image: "" },
   { name: "Black", hex: "#1A1A1A", hex2: null, variantIds: [], image: "" },
@@ -93,20 +92,25 @@ const FALLBACK_COLORS: PrintfulColor[] = [
   { name: "Maroon", hex: "#7F1D1D", hex2: null, variantIds: [], image: "" },
 ];
 
+const MAX_LAYERS_PER_SIDE = 3;
+
+/** Find artifact URL from allArtifacts by layer's artifactId */
+function getArtifactForLayer(layer: Layer, allArtifacts: Artifact[]): Artifact | undefined {
+  return allArtifacts.find((a) => a.id === layer.artifactId);
+}
+
 export function InteractiveCanvas({
-  artifact,
+  multiState,
+  allArtifacts,
+  onMultiStateChange,
+  onRemoveLayer,
+  onAddLayerRequest,
   isLoading = false,
-  designState,
-  onDesignStateChange,
-  onArtifactSelect,
-  recentArtifacts = [],
   onColorChange,
-  onProductChange,
   onPrintAreaChange,
   mockupPreview,
   isMockupLoading = false,
 }: InteractiveCanvasProps) {
-  const [selectedProduct, setSelectedProduct] = useState(PRODUCTS[0]);
   const [productData, setProductData] = useState<ProductData | null>(null);
   const [selectedColor, setSelectedColor] = useState<PrintfulColor>(FALLBACK_COLORS[0]);
   const [loadingProduct, setLoadingProduct] = useState(true);
@@ -124,6 +128,7 @@ export function InteractiveCanvas({
   const hasFetchedInitialRef = useRef(false);
   const onPrintAreaChangeRef = useRef(onPrintAreaChange);
   const onColorChangeRef = useRef(onColorChange);
+  const draggedLayerIdRef = useRef<string | null>(null);
 
   // Keep refs up to date
   useEffect(() => {
@@ -131,19 +136,31 @@ export function InteractiveCanvas({
     onColorChangeRef.current = onColorChange;
   });
 
-  // Fetch product variants from Printful when product changes
+  // Sync view with multiState.activeSide
+  useEffect(() => {
+    if (view !== "mockup") {
+      setView(multiState.activeSide);
+    }
+  }, [multiState.activeSide]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Get current side layers
+  const activeSide = view === "mockup" ? multiState.activeSide : view;
+  const currentSideLayers = multiState[activeSide] || [];
+  const hasLayers = currentSideLayers.length > 0;
+  const sortedLayers = [...currentSideLayers].sort((a, b) => a.zIndex - b.zIndex);
+
+  // Fetch product variants from Printful
   useEffect(() => {
     let cancelled = false;
 
     async function fetchProductData() {
       setLoadingProduct(true);
       try {
-        const response = await fetch(`/api/printful/products/${selectedProduct.id}`);
+        const response = await fetch(`/api/printful/products/${PRODUCT_ID}`);
         if (response.ok && !cancelled) {
           const data = await response.json();
           setProductData(data);
 
-          // Only set default color on first load for this product
           if (!hasFetchedInitialRef.current) {
             const defaultColor =
               data.colors.find((c: PrintfulColor) => c.name === "White") ||
@@ -155,7 +172,6 @@ export function InteractiveCanvas({
             hasFetchedInitialRef.current = true;
           }
 
-          // Notify about print area (front placement)
           const frontPrintArea = data.printAreas?.find(
             (p: PrintArea) => p.placement === "front"
           );
@@ -182,7 +198,7 @@ export function InteractiveCanvas({
     return () => {
       cancelled = true;
     };
-  }, [selectedProduct.id]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Notify parent of color changes
   useEffect(() => {
@@ -196,31 +212,71 @@ export function InteractiveCanvas({
     setSelectedColor(color);
   }, []);
 
-  const handleProductSelect = useCallback((product: (typeof PRODUCTS)[0]) => {
-    setSelectedProduct(product);
-    hasFetchedInitialRef.current = false; // Reset to allow new default color
-    onProductChange?.(product.id);
-  }, [onProductChange]);
+  // Refs for latest state (for event handlers)
+  const multiStateRef = useRef(multiState);
+  multiStateRef.current = multiState;
+
+  const onMultiStateChangeRef = useRef(onMultiStateChange);
+  onMultiStateChangeRef.current = onMultiStateChange;
+
+  // Hit-test: find the topmost layer under a point
+  const hitTestLayer = useCallback(
+    (clientX: number, clientY: number): Layer | null => {
+      const el = designAreaRef.current;
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      // Click position as % of design area
+      const clickXPct = ((clientX - rect.left) / rect.width) * 100;
+      const clickYPct = ((clientY - rect.top) / rect.height) * 100;
+
+      const state = multiStateRef.current;
+      const side = view === "mockup" ? state.activeSide : view;
+      const layers = [...(state[side] || [])].sort((a, b) => b.zIndex - a.zIndex);
+
+      for (const layer of layers) {
+        const ds = layer.designState;
+        // Layer center is at (ds.x%, ds.y%) of the design area
+        // Layer takes up roughly 80% of area at scale 1, so half-extent is 40% * scale
+        const halfW = 40 * ds.scale;
+        const halfH = 40 * ds.scale;
+        if (
+          clickXPct >= ds.x - halfW &&
+          clickXPct <= ds.x + halfW &&
+          clickYPct >= ds.y - halfH &&
+          clickYPct <= ds.y + halfH
+        ) {
+          return layer;
+        }
+      }
+      return null;
+    },
+    [view]
+  );
 
   // Drag handlers
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (!artifact) return;
+      if (!hasLayers) return;
       e.preventDefault();
+
+      const hitLayer = hitTestLayer(e.clientX, e.clientY);
+      if (!hitLayer) return;
+
+      draggedLayerIdRef.current = hitLayer.id;
       setIsDragging(true);
       setDragStart({
         x: e.clientX,
         y: e.clientY,
-        stateX: designState.x,
-        stateY: designState.y,
+        stateX: hitLayer.designState.x,
+        stateY: hitLayer.designState.y,
       });
     },
-    [artifact, designState.x, designState.y]
+    [hasLayers, hitTestLayer]
   );
 
   const handleMouseMove = useCallback(
     (e: MouseEvent) => {
-      if (!isDragging || !designAreaRef.current) return;
+      if (!isDragging || !designAreaRef.current || !draggedLayerIdRef.current) return;
 
       const rect = designAreaRef.current.getBoundingClientRect();
       const deltaX = ((e.clientX - dragStart.x) / rect.width) * 100;
@@ -229,17 +285,25 @@ export function InteractiveCanvas({
       const newX = Math.min(100, Math.max(0, dragStart.stateX + deltaX));
       const newY = Math.min(100, Math.max(0, dragStart.stateY + deltaY));
 
-      onDesignStateChange({
-        ...designState,
-        x: newX,
-        y: newY,
-      });
+      const state = multiStateRef.current;
+      const side = view === "mockup" ? state.activeSide : view;
+      const layer = state[side].find((l) => l.id === draggedLayerIdRef.current);
+      if (!layer) return;
+
+      onMultiStateChangeRef.current(
+        updateLayerDesignState(state, side, draggedLayerIdRef.current, {
+          ...layer.designState,
+          x: newX,
+          y: newY,
+        })
+      );
     },
-    [isDragging, dragStart, designState, onDesignStateChange]
+    [isDragging, dragStart, view]
   );
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
+    draggedLayerIdRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -256,52 +320,67 @@ export function InteractiveCanvas({
   // Touch handlers with pinch-to-zoom support
   const handleTouchStart = useCallback(
     (e: React.TouchEvent) => {
-      if (!artifact) return;
+      if (!hasLayers) return;
 
       if (e.touches.length === 2) {
-        // Start pinch gesture
         isPinchingRef.current = true;
         setIsDragging(false);
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         pinchStartDistRef.current = Math.hypot(dx, dy);
-        pinchStartScaleRef.current = designState.scale;
+        // Use the dragged layer's scale, or default
+        const state = multiStateRef.current;
+        const side = view === "mockup" ? state.activeSide : view;
+        const layer = draggedLayerIdRef.current
+          ? state[side].find((l) => l.id === draggedLayerIdRef.current)
+          : state[side][state[side].length - 1]; // topmost
+        pinchStartScaleRef.current = layer?.designState.scale ?? 1;
+        if (layer) draggedLayerIdRef.current = layer.id;
         return;
       }
 
-      // Single-finger drag
       const touch = e.touches[0];
+      const hitLayer = hitTestLayer(touch.clientX, touch.clientY);
+      if (!hitLayer) return;
+
+      draggedLayerIdRef.current = hitLayer.id;
       setIsDragging(true);
       setDragStart({
         x: touch.clientX,
         y: touch.clientY,
-        stateX: designState.x,
-        stateY: designState.y,
+        stateX: hitLayer.designState.x,
+        stateY: hitLayer.designState.y,
       });
     },
-    [artifact, designState.x, designState.y, designState.scale]
+    [hasLayers, hitTestLayer, view]
   );
 
   const handleTouchMove = useCallback(
     (e: React.TouchEvent) => {
       if (!designAreaRef.current) return;
 
-      if (isPinchingRef.current && e.touches.length === 2) {
-        // Pinch zoom
+      if (isPinchingRef.current && e.touches.length === 2 && draggedLayerIdRef.current) {
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         const newDist = Math.hypot(dx, dy);
         const ratio = newDist / pinchStartDistRef.current;
         const newScale = Math.min(3, Math.max(0.1, pinchStartScaleRef.current * ratio));
 
-        onDesignStateChange({
-          ...designState,
-          scale: newScale,
-        });
+        const state = multiStateRef.current;
+        const side = view === "mockup" ? state.activeSide : view;
+        const layer = state[side].find((l) => l.id === draggedLayerIdRef.current);
+        if (!layer) return;
+
+        onMultiStateChangeRef.current(
+          updateLayerDesignState(state, side, draggedLayerIdRef.current, {
+            ...layer.designState,
+            scale: newScale,
+          })
+        );
         return;
       }
 
-      if (!isDragging) return;
+      if (!isDragging || !draggedLayerIdRef.current) return;
       const touch = e.touches[0];
 
       const rect = designAreaRef.current.getBoundingClientRect();
@@ -311,13 +390,20 @@ export function InteractiveCanvas({
       const newX = Math.min(100, Math.max(0, dragStart.stateX + deltaX));
       const newY = Math.min(100, Math.max(0, dragStart.stateY + deltaY));
 
-      onDesignStateChange({
-        ...designState,
-        x: newX,
-        y: newY,
-      });
+      const state = multiStateRef.current;
+      const side = view === "mockup" ? state.activeSide : view;
+      const layer = state[side].find((l) => l.id === draggedLayerIdRef.current);
+      if (!layer) return;
+
+      onMultiStateChangeRef.current(
+        updateLayerDesignState(state, side, draggedLayerIdRef.current, {
+          ...layer.designState,
+          x: newX,
+          y: newY,
+        })
+      );
     },
-    [isDragging, dragStart, designState, onDesignStateChange]
+    [isDragging, dragStart, view]
   );
 
   const handleTouchEnd = useCallback(
@@ -327,125 +413,115 @@ export function InteractiveCanvas({
       }
       if (e.touches.length === 0) {
         setIsDragging(false);
+        draggedLayerIdRef.current = null;
       }
     },
     []
   );
 
-  // Scroll-wheel zoom (desktop)
-  const designStateRef = useRef(designState);
-  designStateRef.current = designState;
-
-  const onDesignStateChangeRef = useRef(onDesignStateChange);
-  onDesignStateChangeRef.current = onDesignStateChange;
-
+  // Scroll-wheel zoom (desktop) - zooms layer under cursor
   useEffect(() => {
     const el = designAreaRef.current;
-    if (!el || !artifact) return;
+    if (!el || !hasLayers) return;
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const state = designStateRef.current;
+      const hitLayer = hitTestLayer(e.clientX, e.clientY);
+      if (!hitLayer) return;
+
       const factor = e.deltaY < 0 ? 1.05 : 0.95;
-      const newScale = Math.min(3, Math.max(0.1, state.scale * factor));
-      onDesignStateChangeRef.current({
-        ...state,
-        scale: newScale,
-      });
+      const newScale = Math.min(3, Math.max(0.1, hitLayer.designState.scale * factor));
+
+      const state = multiStateRef.current;
+      const side = view === "mockup" ? state.activeSide : view;
+
+      onMultiStateChangeRef.current(
+        updateLayerDesignState(state, side, hitLayer.id, {
+          ...hitLayer.designState,
+          scale: newScale,
+        })
+      );
     };
 
     el.addEventListener("wheel", handleWheel, { passive: false });
     return () => el.removeEventListener("wheel", handleWheel);
-  }, [artifact]);
+  }, [hasLayers, hitTestLayer, view]);
 
+  // Quick controls operate on all layers on active side
   const handleCenter = () => {
-    onDesignStateChange(
-      applyPositionCommand(designState, { action: "center", preset: "center" })
-    );
+    let newState = multiState;
+    for (const layer of currentSideLayers) {
+      const updated = applyPositionCommand(layer.designState, { action: "center", preset: "center" });
+      newState = updateLayerDesignState(newState, activeSide, layer.id, updated);
+    }
+    onMultiStateChange(newState);
   };
 
   const handleReset = () => {
-    onDesignStateChange(DEFAULT_DESIGN_STATE);
+    let newState = multiState;
+    for (const layer of currentSideLayers) {
+      newState = updateLayerDesignState(newState, activeSide, layer.id, { ...DEFAULT_DESIGN_STATE });
+    }
+    onMultiStateChange(newState);
   };
 
   const handleRotate = () => {
-    onDesignStateChange(
-      applyPositionCommand(designState, { action: "rotate", rotation: 15 })
-    );
+    let newState = multiState;
+    for (const layer of currentSideLayers) {
+      const updated = applyPositionCommand(layer.designState, { action: "rotate", rotation: 15 });
+      newState = updateLayerDesignState(newState, activeSide, layer.id, updated);
+    }
+    onMultiStateChange(newState);
+  };
+
+  const handleSideToggle = (side: "front" | "back") => {
+    setView(side);
+    onMultiStateChange({ ...multiState, activeSide: side });
   };
 
   const displayedColors = showAllColors ? colors : colors.slice(0, 12);
 
   return (
     <div className="flex flex-col gap-4 w-full max-w-lg mx-auto">
-      {/* Product selector */}
-      <div className="flex justify-center gap-2">
-        {PRODUCTS.map((product) => {
-          const isActive = selectedProduct.id === product.id;
-          return (
-            <button
-              key={product.id}
-              onClick={() => handleProductSelect(product)}
-              className={cn(
-                "flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-left",
-                isActive
-                  ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-                  : "border-border hover:border-muted-foreground/30 bg-background"
-              )}
-            >
-              {productData?.product.id === product.id && productData.product.image ? (
-                <Image
-                  src={productData.product.image}
-                  alt={product.name}
-                  width={32}
-                  height={32}
-                  className="rounded object-contain"
-                  unoptimized
-                />
-              ) : (
-                <div className="w-8 h-8 rounded bg-muted" />
-              )}
-              <div>
-                <p className="text-xs font-medium leading-tight">{product.name}</p>
-                <p className="text-[10px] text-muted-foreground leading-tight">{product.description}</p>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
       {/* Main preview area */}
       <div className="relative bg-gradient-to-b from-gray-100 to-gray-200 rounded-xl p-6 overflow-hidden">
         {/* View thumbnails */}
         <div className="absolute top-3 right-3 flex flex-col gap-1.5 z-10">
-          {(["front", "back"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={cn(
-                "w-12 h-12 rounded-md border-2 overflow-hidden transition-all bg-gray-50",
-                view === v
-                  ? "border-primary ring-1 ring-primary/30"
-                  : "border-background/80 hover:border-muted-foreground/50 opacity-70 hover:opacity-100"
-              )}
-              title={v === "front" ? "Front" : "Back"}
-            >
-              {selectedColor.image ? (
-                <Image
-                  src={selectedColor.image}
-                  alt={`${v} view`}
-                  width={48}
-                  height={48}
-                  className="w-full h-full object-contain"
-                  unoptimized
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-[10px] text-muted-foreground capitalize">
-                  {v}
-                </div>
-              )}
-            </button>
-          ))}
+          {/* Front view only — back toggle disabled until we have a proper back product image */}
+          {(["front"] as const).map((v) => {
+            const sideLayers = multiState[v];
+            return (
+              <button
+                key={v}
+                onClick={() => handleSideToggle(v)}
+                className={cn(
+                  "relative w-12 h-12 rounded-md border-2 overflow-hidden transition-all bg-gray-50",
+                  view === v
+                    ? "border-primary ring-1 ring-primary/30"
+                    : "border-background/80 hover:border-muted-foreground/50 opacity-70 hover:opacity-100"
+                )}
+                title="Front"
+              >
+                {selectedColor.image ? (
+                  <Image
+                    src={selectedColor.image}
+                    alt={`${v} view`}
+                    width={48}
+                    height={48}
+                    className="w-full h-full object-contain"
+                    unoptimized
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-[10px] text-muted-foreground capitalize">
+                    {v}
+                  </div>
+                )}
+                {sideLayers.length > 0 && (
+                  <div className="absolute bottom-0.5 right-0.5 w-2 h-2 rounded-full bg-primary border border-white" />
+                )}
+              </button>
+            );
+          })}
           {/* Mockup preview thumbnail */}
           {(mockupPreview || isMockupLoading) && (
             <button
@@ -494,12 +570,12 @@ export function InteractiveCanvas({
               productImage={selectedColor.image}
               view={view === "mockup" ? "front" : view}
               className="w-full h-full"
-              showPrintArea={!artifact && !isDragging}
+              showPrintArea={!hasLayers && !isDragging}
             >
-              {/* Design overlay */}
+              {/* Multi-layer design overlay */}
               {isLoading ? (
                 <Skeleton className="w-3/4 h-3/4 rounded" />
-              ) : artifact ? (
+              ) : hasLayers ? (
                 <div
                   ref={designAreaRef}
                   className={cn(
@@ -511,29 +587,39 @@ export function InteractiveCanvas({
                   onTouchMove={handleTouchMove}
                   onTouchEnd={handleTouchEnd}
                 >
-                  <div
-                    className="absolute inset-0 flex items-center justify-center"
-                    style={{
-                      transform: designStateToTransform(designState),
-                      transition: isDragging ? "none" : "transform 0.15s ease-out",
-                    }}
-                  >
-                    <Image
-                      src={artifact.storage_url}
-                      alt={artifact.prompt || "Design"}
-                      fill
-                      className="object-contain pointer-events-none select-none"
-                      draggable={false}
-                    />
-                    {/* Drag hint */}
-                    {!isDragging && (
-                      <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
-                        <div className="bg-black/50 rounded-full p-2">
-                          <Move className="w-5 h-5 text-white" />
-                        </div>
+                  {sortedLayers.map((layer) => {
+                    const artifact = getArtifactForLayer(layer, allArtifacts);
+                    if (!artifact) return null;
+                    return (
+                      <div
+                        key={layer.id}
+                        className="absolute inset-0 flex items-center justify-center"
+                        style={{
+                          transform: designStateToTransform(layer.designState),
+                          transition: isDragging && draggedLayerIdRef.current === layer.id
+                            ? "none"
+                            : "transform 0.15s ease-out",
+                          zIndex: layer.zIndex,
+                        }}
+                      >
+                        <Image
+                          src={artifact.storage_url}
+                          alt={artifact.prompt || "Design"}
+                          fill
+                          className="object-contain pointer-events-none select-none"
+                          draggable={false}
+                        />
                       </div>
-                    )}
-                  </div>
+                    );
+                  })}
+                  {/* Drag hint */}
+                  {!isDragging && (
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity z-50">
+                      <div className="bg-black/50 rounded-full p-2">
+                        <Move className="w-5 h-5 text-white" />
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="flex items-center justify-center w-full h-full text-muted-foreground/40">
@@ -541,7 +627,7 @@ export function InteractiveCanvas({
                     <p className="text-sm font-medium">Design Area</p>
                     {frontPrintArea && (
                       <p className="text-xs mt-1">
-                        {frontPrintArea.width} × {frontPrintArea.height}px
+                        {frontPrintArea.width} x {frontPrintArea.height}px
                       </p>
                     )}
                   </div>
@@ -551,25 +637,70 @@ export function InteractiveCanvas({
           )}
         </div>
 
-        {/* Position indicator */}
-        {artifact && (
-          <div className="absolute bottom-3 left-3 text-[10px] text-muted-foreground bg-background/80 px-2 py-1 rounded font-mono">
-            {Math.round(designState.x)}%, {Math.round(designState.y)}% •{" "}
-            {Math.round(designState.scale * 100)}%
-            {designState.rotation !== 0 && ` • ${designState.rotation}°`}
-          </div>
-        )}
+        {/* Position indicator (shows first dragged layer or topmost) */}
+        {hasLayers && (() => {
+          const topLayer = sortedLayers[sortedLayers.length - 1];
+          const ds = topLayer?.designState;
+          if (!ds) return null;
+          return (
+            <div className="absolute bottom-3 left-3 text-[10px] text-muted-foreground bg-background/80 px-2 py-1 rounded font-mono">
+              {Math.round(ds.x)}%, {Math.round(ds.y)}% .{" "}
+              {Math.round(ds.scale * 100)}%
+              {ds.rotation !== 0 && ` . ${ds.rotation}\u00b0`}
+              {currentSideLayers.length > 1 && ` . ${currentSideLayers.length} layers`}
+            </div>
+          );
+        })()}
       </div>
 
+      {/* Layer indicator panel */}
+      {(hasLayers || multiState.front.length > 0 || multiState.back.length > 0) && (
+        <div className="flex justify-center items-center gap-2">
+          {sortedLayers.map((layer) => {
+            const artifact = getArtifactForLayer(layer, allArtifacts);
+            if (!artifact) return null;
+            return (
+              <div key={layer.id} className="relative group">
+                <div className="w-10 h-10 rounded border-2 border-muted overflow-hidden">
+                  <Image
+                    src={artifact.storage_url}
+                    alt=""
+                    width={40}
+                    height={40}
+                    className="object-cover w-full h-full"
+                  />
+                </div>
+                <button
+                  onClick={() => onRemoveLayer(layer.id)}
+                  className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-destructive text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Remove layer"
+                >
+                  <X className="w-2.5 h-2.5" />
+                </button>
+              </div>
+            );
+          })}
+          {currentSideLayers.length < MAX_LAYERS_PER_SIDE && onAddLayerRequest && (
+            <button
+              onClick={onAddLayerRequest}
+              className="w-10 h-10 rounded border-2 border-dashed border-muted-foreground/30 flex items-center justify-center text-muted-foreground/50 hover:border-muted-foreground/60 hover:text-muted-foreground/80 transition-colors"
+              title="Add design layer"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Quick positioning controls */}
-      {artifact && (
+      {hasLayers && (
         <div className="flex justify-center gap-1">
           <Button
             variant="outline"
             size="icon"
             className="h-8 w-8"
             onClick={handleRotate}
-            title="Rotate 15°"
+            title="Rotate 15deg"
           >
             <RotateCcw className="h-4 w-4" />
           </Button>
@@ -644,37 +775,6 @@ export function InteractiveCanvas({
           </button>
         )}
       </div>
-
-      {/* Recent artifacts */}
-      {recentArtifacts.length > 1 && (
-        <div className="space-y-2">
-          <p className="text-xs text-muted-foreground text-center">
-            Previous designs
-          </p>
-          <div className="flex justify-center gap-2">
-            {recentArtifacts.slice(0, 5).map((a) => (
-              <button
-                key={a.id}
-                onClick={() => onArtifactSelect?.(a)}
-                className={cn(
-                  "w-12 h-12 rounded border-2 overflow-hidden transition-all",
-                  artifact?.id === a.id
-                    ? "border-primary"
-                    : "border-muted hover:border-muted-foreground"
-                )}
-              >
-                <Image
-                  src={a.storage_url}
-                  alt=""
-                  width={48}
-                  height={48}
-                  className="object-cover"
-                />
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -84,6 +84,7 @@ export async function POST(request: NextRequest) {
         sessionId: body.sessionId,
         artifactId: body.artifactId,
         config: body.config,
+        multiState: body.multiState || null,
       },
     });
 

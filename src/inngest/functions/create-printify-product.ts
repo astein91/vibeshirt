@@ -1,12 +1,16 @@
 import { inngest } from "../client";
 import { createServiceClient } from "@/lib/supabase/server";
 import { uploadImage, createProduct, getShopId } from "@/lib/printify/client";
+import { type MultiSideDesignState, migrateDesignState, getAllArtifactIds } from "@/lib/design-state";
 
 export const createPrintifyProduct = inngest.createFunction(
   { id: "create-printify-product" },
   { event: "printify/create-product" },
   async ({ event, step }) => {
-    const { jobId, sessionId, artifactId, config } = event.data;
+    const { jobId, sessionId, artifactId, config, multiState: rawMultiState } = event.data;
+
+    // Migrate design state (handles both old single and new multi format)
+    const multiState: MultiSideDesignState = migrateDesignState(rawMultiState);
 
     // Mark job as running
     await step.run("mark-running", async () => {
@@ -17,48 +21,101 @@ export const createPrintifyProduct = inngest.createFunction(
         .eq("id", jobId);
     });
 
-    // Get the artifact
-    const artifact = await step.run("get-artifact", async () => {
+    // Collect all unique artifact IDs from layers (plus the primary artifactId as fallback)
+    const layerArtifactIds = getAllArtifactIds(multiState);
+    const allArtifactIds = [...new Set([artifactId, ...layerArtifactIds])].filter(Boolean);
+
+    // Get all artifacts
+    const artifacts = await step.run("get-artifacts", async () => {
       const supabase = createServiceClient();
       const { data } = await supabase
         .from("artifacts")
         .select("*")
-        .eq("id", artifactId)
-        .single();
-      return data;
+        .in("id", allArtifactIds);
+      return data || [];
     });
 
-    if (!artifact) {
+    if (artifacts.length === 0) {
       await step.run("mark-failed-no-artifact", async () => {
         const supabase = createServiceClient();
         await supabase
           .from("jobs")
           .update({
             status: "FAILED",
-            error: "Artifact not found",
+            error: "No artifacts found",
           })
           .eq("id", jobId);
       });
-      return { success: false, error: "Artifact not found" };
+      return { success: false, error: "No artifacts found" };
     }
 
-    // Upload image to Printify
-    const printifyImage = await step.run("upload-to-printify", async () => {
-      const imageUrl = artifact.storage_url.startsWith("http")
-        ? artifact.storage_url
-        : `${process.env.NEXT_PUBLIC_APP_URL}${artifact.storage_url}`;
+    // Upload each unique image to Printify (deduplicated)
+    const printifyImages = await step.run("upload-to-printify", async () => {
+      const imageMap: Record<string, string> = {}; // artifactId -> printifyImageId
 
-      return uploadImage(`design-${artifact.id}.png`, imageUrl);
+      for (const artifact of artifacts) {
+        const imageUrl = artifact.storage_url.startsWith("http")
+          ? artifact.storage_url
+          : `${process.env.NEXT_PUBLIC_APP_URL}${artifact.storage_url}`;
+
+        const uploaded = await uploadImage(`design-${artifact.id}.png`, imageUrl);
+        imageMap[artifact.id] = uploaded.id;
+      }
+
+      return imageMap;
     });
 
-    // Update artifact with Printify image ID
-    await step.run("update-artifact", async () => {
+    // Update artifacts with Printify image IDs
+    await step.run("update-artifacts", async () => {
       const supabase = createServiceClient();
-      await supabase
-        .from("artifacts")
-        .update({ printify_image_id: printifyImage.id })
-        .eq("id", artifactId);
+      for (const [artId, printifyImageId] of Object.entries(printifyImages)) {
+        await supabase
+          .from("artifacts")
+          .update({ printify_image_id: printifyImageId })
+          .eq("id", artId);
+      }
     });
+
+    // Build placeholders from multiState layers
+    const placeholders: Array<{
+      position: string;
+      images: Array<{ id: string; x: number; y: number; scale: number; angle: number }>;
+    }> = [];
+
+    for (const side of ["front", "back"] as const) {
+      const layers = multiState[side];
+      if (layers.length === 0) continue;
+
+      const images = layers
+        .filter((l) => printifyImages[l.artifactId])
+        .map((layer) => ({
+          id: printifyImages[layer.artifactId],
+          x: layer.designState.x / 100, // App uses 0-100%, Printify uses 0-1
+          y: layer.designState.y / 100,
+          scale: layer.designState.scale,
+          angle: layer.designState.rotation,
+        }));
+
+      if (images.length > 0) {
+        placeholders.push({ position: side, images });
+      }
+    }
+
+    // Fallback: if no layers produced placeholders, use primary artifact on front
+    if (placeholders.length === 0 && printifyImages[artifactId]) {
+      placeholders.push({
+        position: "front",
+        images: [
+          {
+            id: printifyImages[artifactId],
+            x: 0.5,
+            y: 0.5,
+            scale: 1,
+            angle: 0,
+          },
+        ],
+      });
+    }
 
     // Create the product
     const product = await step.run("create-product", async () => {
@@ -87,20 +144,7 @@ export const createPrintifyProduct = inngest.createFunction(
         print_areas: [
           {
             variant_ids: enabledVariantIds,
-            placeholders: [
-              {
-                position: "front",
-                images: [
-                  {
-                    id: printifyImage.id,
-                    x: 0.5,
-                    y: 0.5,
-                    scale: 1,
-                    angle: 0,
-                  },
-                ],
-              },
-            ],
+            placeholders,
           },
         ],
       });
@@ -128,7 +172,7 @@ export const createPrintifyProduct = inngest.createFunction(
           status: "COMPLETED",
           output: {
             productId: product.id,
-            printifyImageId: printifyImage.id,
+            printifyImageIds: printifyImages,
           },
         })
         .eq("id", jobId);
@@ -144,7 +188,7 @@ export const createPrintifyProduct = inngest.createFunction(
     return {
       success: true,
       productId: product.id,
-      printifyImageId: printifyImage.id,
+      printifyImageIds: printifyImages,
     };
   }
 );

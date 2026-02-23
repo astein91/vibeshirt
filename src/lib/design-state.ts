@@ -1,3 +1,5 @@
+import { nanoid } from "nanoid";
+
 // Design state represents how a design is positioned on a product
 // This structure can be modified via drag/drop UI or via natural language commands
 
@@ -179,6 +181,128 @@ export function deserializeCanvasState(json: string): CanvasState | null {
   } catch {
     return null;
   }
+}
+
+// --- Multi-layer / multi-side types ---
+
+export interface Layer {
+  id: string;
+  artifactId: string;
+  designState: DesignState;
+  zIndex: number;
+}
+
+export interface MultiSideDesignState {
+  version: 2;
+  activeSide: "front" | "back";
+  front: Layer[];
+  back: Layer[];
+}
+
+const MAX_LAYERS_PER_SIDE = 3;
+
+export const DEFAULT_MULTI_STATE: MultiSideDesignState = {
+  version: 2,
+  activeSide: "front",
+  front: [],
+  back: [],
+};
+
+/**
+ * Detect old single-design format and wrap it in v2 multi-layer structure.
+ * If the data is already v2, return as-is.
+ * If null/undefined, return an empty v2 state.
+ */
+export function migrateDesignState(raw: unknown): MultiSideDesignState {
+  if (!raw || typeof raw !== "object") {
+    return { ...DEFAULT_MULTI_STATE, front: [], back: [] };
+  }
+
+  const obj = raw as Record<string, unknown>;
+
+  // Already v2
+  if (obj.version === 2 && Array.isArray(obj.front) && Array.isArray(obj.back)) {
+    return obj as unknown as MultiSideDesignState;
+  }
+
+  // Old single-design format: { x, y, scale, rotation, ... }
+  if (typeof obj.x === "number" && typeof obj.y === "number") {
+    const legacyState: DesignState = {
+      x: obj.x as number,
+      y: obj.y as number,
+      scale: (obj.scale as number) ?? 1,
+      rotation: (obj.rotation as number) ?? 0,
+      lockAspectRatio: (obj.lockAspectRatio as boolean) ?? true,
+    };
+    return {
+      version: 2,
+      activeSide: "front",
+      front: [
+        {
+          id: nanoid(8),
+          artifactId: "", // caller fills this from latestArtifact
+          designState: legacyState,
+          zIndex: 0,
+        },
+      ],
+      back: [],
+    };
+  }
+
+  return { ...DEFAULT_MULTI_STATE, front: [], back: [] };
+}
+
+/** Add a new layer to a side. Returns unchanged state if at max capacity. */
+export function addLayerToSide(
+  state: MultiSideDesignState,
+  side: "front" | "back",
+  artifactId: string
+): MultiSideDesignState {
+  const layers = state[side];
+  if (layers.length >= MAX_LAYERS_PER_SIDE) return state;
+
+  const maxZ = layers.reduce((max, l) => Math.max(max, l.zIndex), -1);
+  const newLayer: Layer = {
+    id: nanoid(8),
+    artifactId,
+    designState: { ...DEFAULT_DESIGN_STATE },
+    zIndex: maxZ + 1,
+  };
+
+  return { ...state, [side]: [...layers, newLayer] };
+}
+
+/** Remove a layer by ID. */
+export function removeLayerFromSide(
+  state: MultiSideDesignState,
+  side: "front" | "back",
+  layerId: string
+): MultiSideDesignState {
+  return { ...state, [side]: state[side].filter((l) => l.id !== layerId) };
+}
+
+/** Update a specific layer's designState. */
+export function updateLayerDesignState(
+  state: MultiSideDesignState,
+  side: "front" | "back",
+  layerId: string,
+  designState: DesignState
+): MultiSideDesignState {
+  return {
+    ...state,
+    [side]: state[side].map((l) =>
+      l.id === layerId ? { ...l, designState } : l
+    ),
+  };
+}
+
+/** Get all unique artifact IDs across both sides. */
+export function getAllArtifactIds(state: MultiSideDesignState): string[] {
+  const ids = new Set<string>();
+  for (const l of [...state.front, ...state.back]) {
+    if (l.artifactId) ids.add(l.artifactId);
+  }
+  return Array.from(ids);
 }
 
 // Calculate the actual pixel dimensions for the design on the canvas

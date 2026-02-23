@@ -15,9 +15,13 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserMenu } from "@/components/auth/UserMenu";
 import {
-  DesignState,
+  type MultiSideDesignState,
   DEFAULT_DESIGN_STATE,
   applyPositionCommand,
+  migrateDesignState,
+  addLayerToSide,
+  removeLayerFromSide,
+  updateLayerDesignState,
 } from "@/lib/design-state";
 
 interface PageProps {
@@ -25,15 +29,19 @@ interface PageProps {
 }
 
 const DEFAULT_USER_NAME = "You";
+const PRODUCT_ID = 71; // Bella+Canvas 3001
 const getDesignStateKey = (sessionId: string) => `vibeshirt-design-state-${sessionId}`;
 const getNuxDismissedKey = (sessionId: string) => `vibeshirt-nux-${sessionId}`;
 
 export default function DesignSessionPage({ params }: PageProps) {
   const { sessionId } = use(params);
-  const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
-  const [designState, setDesignState] = useState<DesignState>(DEFAULT_DESIGN_STATE);
+  const [multiState, setMultiState] = useState<MultiSideDesignState>({
+    version: 2,
+    activeSide: "front",
+    front: [],
+    back: [],
+  });
   const [selectedColor, setSelectedColor] = useState<{ name: string; hex: string } | null>(null);
-  const [selectedProduct, setSelectedProduct] = useState<number>(71);
   const [printArea, setPrintArea] = useState<{ placement: string; title: string; width: number; height: number; dpi: number } | null>(null);
   const [isNormalizing, setIsNormalizing] = useState(false);
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
@@ -41,18 +49,23 @@ export default function DesignSessionPage({ params }: PageProps) {
 
   const vibeAutoSentRef = useRef(false);
   const mockupGeneratedForRef = useRef<string | null>(null);
+  const seenArtifactIdsRef = useRef<Set<string>>(new Set());
+  const initialLoadDoneRef = useRef(false);
 
   const { session, isLoading: sessionLoading, makePublic } = useSession(sessionId);
   const { messages, isLoading: messagesLoading, isSending, sendMessage } = useMessages(sessionId);
   const { artifacts, latestArtifact, latestGenerated, latestNormalized, isLoading: artifactsLoading, uploadArtifact } = useArtifacts(sessionId);
   const { generateMockup, mockups, isGenerating: isMockupGenerating } = usePrintfulMockup();
 
-  // Load design state and check if NUX should show
+  // Load design state from localStorage first, then DB fallback
   useEffect(() => {
-    const savedDesignState = localStorage.getItem(getDesignStateKey(sessionId));
-    if (savedDesignState) {
+    const savedRaw = localStorage.getItem(getDesignStateKey(sessionId));
+    if (savedRaw) {
       try {
-        setDesignState(JSON.parse(savedDesignState));
+        const parsed = JSON.parse(savedRaw);
+        const migrated = migrateDesignState(parsed);
+        setMultiState(migrated);
+        initialLoadDoneRef.current = true;
       } catch {
         // Ignore invalid state
       }
@@ -64,26 +77,109 @@ export default function DesignSessionPage({ params }: PageProps) {
     }
   }, [sessionId]);
 
-  // Save design state to localStorage when it changes
+  // If no localStorage state, migrate from DB design_state when session loads
   useEffect(() => {
-    localStorage.setItem(getDesignStateKey(sessionId), JSON.stringify(designState));
-  }, [sessionId, designState]);
+    if (session && !initialLoadDoneRef.current) {
+      const migrated = migrateDesignState(session.design_state);
+      setMultiState(migrated);
+      initialLoadDoneRef.current = true;
+    }
+  }, [session]);
 
-  // Debounced save of design state to DB (for share page)
+  // Fill empty artifactId on migrated layers (from old single-design format)
+  useEffect(() => {
+    if (!latestArtifact || !initialLoadDoneRef.current) return;
+
+    let changed = false;
+    let newState = multiState;
+
+    for (const side of ["front", "back"] as const) {
+      for (const layer of newState[side]) {
+        if (!layer.artifactId && latestArtifact) {
+          newState = updateLayerDesignState(newState, side, layer.id, layer.designState);
+          // Need to set artifactId directly
+          newState = {
+            ...newState,
+            [side]: newState[side].map((l) =>
+              l.id === layer.id ? { ...l, artifactId: latestArtifact.id } : l
+            ),
+          };
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) setMultiState(newState);
+  }, [latestArtifact]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Track seen artifact IDs and auto-add new generations as layers
+  useEffect(() => {
+    if (!initialLoadDoneRef.current) return;
+
+    for (const artifact of artifacts) {
+      if (seenArtifactIdsRef.current.has(artifact.id)) continue;
+      seenArtifactIdsRef.current.add(artifact.id);
+    }
+  }, [artifacts]);
+
+  // Auto-add new artifacts as layers when they appear
+  const prevArtifactCountRef = useRef(0);
+  useEffect(() => {
+    if (!initialLoadDoneRef.current || artifacts.length === 0) return;
+
+    // Only auto-add if we have more artifacts than before
+    if (artifacts.length <= prevArtifactCountRef.current) {
+      prevArtifactCountRef.current = artifacts.length;
+      return;
+    }
+
+    const newArtifacts = artifacts.slice(0, artifacts.length - prevArtifactCountRef.current);
+    prevArtifactCountRef.current = artifacts.length;
+
+    let newState = multiState;
+    for (const artifact of newArtifacts) {
+      if (artifact.type !== "GENERATED" && artifact.type !== "NORMALIZED") continue;
+      // Check if already a layer
+      const alreadyLayer = [...newState.front, ...newState.back].some(
+        (l) => l.artifactId === artifact.id
+      );
+      if (alreadyLayer) continue;
+
+      // Add to active side if under cap
+      const side = newState.activeSide;
+      if (newState[side].length < 3) {
+        newState = addLayerToSide(newState, side, artifact.id);
+      }
+    }
+
+    if (newState !== multiState) {
+      setMultiState(newState);
+    }
+  }, [artifacts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Save multiState to localStorage when it changes
+  useEffect(() => {
+    if (initialLoadDoneRef.current) {
+      localStorage.setItem(getDesignStateKey(sessionId), JSON.stringify(multiState));
+    }
+  }, [sessionId, multiState]);
+
+  // Debounced save of multiState to DB
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    if (!initialLoadDoneRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       fetch(`/api/sessions/${sessionId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ designState }),
-      }).catch(() => {}); // Fire-and-forget
+        body: JSON.stringify({ designState: multiState }),
+      }).catch(() => {});
     }, 1000);
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [sessionId, designState]);
+  }, [sessionId, multiState]);
 
   // Auto-send vibe description from homepage as first message
   useEffect(() => {
@@ -91,7 +187,7 @@ export default function DesignSessionPage({ params }: PageProps) {
       session?.vibe_description &&
       !vibeAutoSentRef.current &&
       !messagesLoading &&
-      messages.length <= 1 // Only the system welcome message
+      messages.length <= 1
     ) {
       vibeAutoSentRef.current = true;
       sendMessage(session.vibe_description, DEFAULT_USER_NAME);
@@ -110,26 +206,30 @@ export default function DesignSessionPage({ params }: PageProps) {
     if (
       latestNormalized &&
       latestNormalized.id !== mockupGeneratedForRef.current &&
-      selectedProduct &&
+      PRODUCT_ID &&
       !isMockupGenerating
     ) {
       mockupGeneratedForRef.current = latestNormalized.id;
       generateMockup({
-        productId: selectedProduct,
+        productId: PRODUCT_ID,
         variantIds: [],
         imageUrl: latestNormalized.storage_url,
         placement: "front",
       });
     }
-  }, [latestNormalized, selectedProduct, isMockupGenerating, generateMockup]);
+  }, [latestNormalized, PRODUCT_ID, isMockupGenerating, generateMockup]);
 
   const handleDismissNux = () => {
     setShowNux(false);
     localStorage.setItem(getNuxDismissedKey(sessionId), "1");
   };
 
-  const handleDesignStateChange = useCallback((newState: DesignState) => {
-    setDesignState(newState);
+  const handleMultiStateChange = useCallback((newState: MultiSideDesignState) => {
+    setMultiState(newState);
+  }, []);
+
+  const handleRemoveLayer = useCallback((layerId: string) => {
+    setMultiState((prev) => removeLayerFromSide(prev, prev.activeSide, layerId));
   }, []);
 
   const handleSendMessage = async (content: string) => {
@@ -141,11 +241,16 @@ export default function DesignSessionPage({ params }: PageProps) {
     const isPositionCommand = positionKeywords.some(kw => lowerContent.includes(kw)) &&
       !lowerContent.includes("design") && !lowerContent.includes("create") && !lowerContent.includes("make");
 
-    if (isPositionCommand && latestArtifact) {
+    if (isPositionCommand && multiState[multiState.activeSide].length > 0) {
       const command = parseSimplePositionCommand(lowerContent);
       if (command) {
-        const newState = applyPositionCommand(designState, command);
-        setDesignState(newState);
+        // Apply to all layers on active side
+        let newState = multiState;
+        for (const layer of newState[newState.activeSide]) {
+          const updated = applyPositionCommand(layer.designState, command);
+          newState = updateLayerDesignState(newState, newState.activeSide, layer.id, updated);
+        }
+        setMultiState(newState);
         await sendMessage(content, DEFAULT_USER_NAME);
         return;
       }
@@ -163,6 +268,10 @@ export default function DesignSessionPage({ params }: PageProps) {
     setIsNormalizing(true);
 
     try {
+      // Use first front layer's design state for normalization, or default
+      const frontLayers = multiState.front;
+      const designState = frontLayers[0]?.designState || DEFAULT_DESIGN_STATE;
+
       const response = await fetch("/api/normalize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -197,7 +306,7 @@ export default function DesignSessionPage({ params }: PageProps) {
         body: JSON.stringify({
           vibeDescription: session?.vibe_description || "custom design",
           artworkDescription: latestArtifact.prompt,
-          blueprintId: selectedProduct,
+          blueprintId: PRODUCT_ID,
           colorName: selectedColor?.name,
         }),
       });
@@ -216,17 +325,13 @@ export default function DesignSessionPage({ params }: PageProps) {
           sessionId,
           artifactId: latestArtifact.id,
           config,
-          designState,
+          multiState,
         }),
       });
     } finally {
       setTimeout(() => setIsCreatingProduct(false), 5000);
     }
   };
-
-  const displayArtifact = selectedArtifact
-    ? artifacts.find((a) => a.id === selectedArtifact)
-    : latestArtifact;
 
   const isLoading = sessionLoading || messagesLoading;
 
@@ -247,7 +352,7 @@ export default function DesignSessionPage({ params }: PageProps) {
         <div className="text-center space-y-4">
           <h1 className="text-2xl font-bold">Session Not Found</h1>
           <p className="text-muted-foreground">
-            This design session doesn't exist or has been deleted.
+            This design session doesn&apos;t exist or has been deleted.
           </p>
           <Link href="/">
             <Button>Go Home</Button>
@@ -302,21 +407,8 @@ export default function DesignSessionPage({ params }: PageProps) {
 
           <div className="flex-1 flex items-center justify-center">
             <InteractiveCanvas
-              artifact={
-                displayArtifact
-                  ? {
-                      id: displayArtifact.id,
-                      type: displayArtifact.type,
-                      storage_url: displayArtifact.storage_url,
-                      prompt: displayArtifact.prompt,
-                      metadata: displayArtifact.metadata as Record<string, unknown>,
-                    }
-                  : null
-              }
-              isLoading={artifactsLoading}
-              designState={designState}
-              onDesignStateChange={handleDesignStateChange}
-              recentArtifacts={artifacts
+              multiState={multiState}
+              allArtifacts={artifacts
                 .filter((a) => a.type === "GENERATED" || a.type === "NORMALIZED")
                 .map((a) => ({
                   id: a.id,
@@ -325,9 +417,10 @@ export default function DesignSessionPage({ params }: PageProps) {
                   prompt: a.prompt,
                   metadata: a.metadata as Record<string, unknown>,
                 }))}
-              onArtifactSelect={(a) => setSelectedArtifact(a.id)}
+              onMultiStateChange={handleMultiStateChange}
+              onRemoveLayer={handleRemoveLayer}
+              isLoading={artifactsLoading}
               onColorChange={(color) => setSelectedColor(color)}
-              onProductChange={(blueprintId) => setSelectedProduct(blueprintId)}
               onPrintAreaChange={(area) => setPrintArea(area)}
               mockupPreview={
                 mockups?.[0]
@@ -352,7 +445,18 @@ export default function DesignSessionPage({ params }: PageProps) {
             isLoading={isSending}
             userName={DEFAULT_USER_NAME}
             onSendMessage={handleSendMessage}
-            onArtifactClick={(a) => setSelectedArtifact(a.id)}
+            onArtifactClick={(a) => {
+              // Clicking an artifact in chat could add it as a layer
+              const alreadyLayer = [...multiState.front, ...multiState.back].some(
+                (l) => l.artifactId === a.id
+              );
+              if (!alreadyLayer) {
+                const side = multiState.activeSide;
+                if (multiState[side].length < 3) {
+                  setMultiState(addLayerToSide(multiState, side, a.id));
+                }
+              }
+            }}
           />
         </div>
       </div>
@@ -363,7 +467,7 @@ export default function DesignSessionPage({ params }: PageProps) {
   );
 }
 
-// Simple position command parser (duplicated from generate.ts for client-side use)
+// Simple position command parser
 function parseSimplePositionCommand(message: string): {
   action: "move" | "scale" | "rotate" | "reset" | "center";
   x?: number;

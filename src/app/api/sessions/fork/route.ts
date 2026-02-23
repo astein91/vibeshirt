@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getUser } from "@/lib/supabase/auth";
 import { nanoid } from "nanoid";
+import { migrateDesignState, getAllArtifactIds } from "@/lib/design-state";
 
 // POST /api/sessions/fork - Fork/remix a shared session
 export async function POST(request: NextRequest) {
@@ -33,7 +34,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create new session based on source
+    // Create new session based on source (design_state copied as-is, migration on read)
     const { data: newSession, error: createError } = await supabase
       .from("design_sessions")
       .insert({
@@ -47,29 +48,77 @@ export async function POST(request: NextRequest) {
 
     if (createError) throw createError;
 
-    // Find best artifact to copy (prefer NORMALIZED, then GENERATED)
+    // Collect all artifact IDs referenced by layers in the design state
+    const multiState = migrateDesignState(source.design_state);
+    const layerArtifactIds = getAllArtifactIds(multiState);
+
+    // Fetch all referenced artifacts + fallback to latest
     const { data: artifacts } = await supabase
       .from("artifacts")
       .select("*")
       .eq("session_id", sourceSessionId)
       .in("type", ["NORMALIZED", "GENERATED"])
       .order("created_at", { ascending: false })
-      .limit(5);
+      .limit(10);
 
-    const artifactToCopy =
-      artifacts?.find((a) => a.type === "NORMALIZED") ||
-      artifacts?.find((a) => a.type === "GENERATED");
+    // Determine which artifacts to copy: all layer-referenced ones, plus fallback
+    const artifactIdsToCopy = new Set(layerArtifactIds);
 
-    if (artifactToCopy) {
-      await supabase.from("artifacts").insert({
-        session_id: newSession.id,
-        type: artifactToCopy.type,
-        storage_url: artifactToCopy.storage_url,
-        storage_key: artifactToCopy.storage_key,
-        metadata: artifactToCopy.metadata,
-        prompt: artifactToCopy.prompt,
-        source_artifact_id: artifactToCopy.id,
-      });
+    // If no layer artifacts found (old format), add the latest as fallback
+    if (artifactIdsToCopy.size === 0) {
+      const fallback =
+        artifacts?.find((a) => a.type === "NORMALIZED") ||
+        artifacts?.find((a) => a.type === "GENERATED");
+      if (fallback) {
+        artifactIdsToCopy.add(fallback.id);
+      }
+    }
+
+    // Copy each artifact, building old-to-new ID mapping for design_state update
+    const idMapping: Record<string, string> = {};
+    for (const artId of artifactIdsToCopy) {
+      const artifact = artifacts?.find((a) => a.id === artId);
+      if (!artifact) continue;
+
+      const { data: newArtifact } = await supabase
+        .from("artifacts")
+        .insert({
+          session_id: newSession.id,
+          type: artifact.type,
+          storage_url: artifact.storage_url,
+          storage_key: artifact.storage_key,
+          metadata: artifact.metadata,
+          prompt: artifact.prompt,
+          source_artifact_id: artifact.id,
+        })
+        .select("id")
+        .single();
+
+      if (newArtifact) {
+        idMapping[artId] = newArtifact.id;
+      }
+    }
+
+    // Update design_state layer artifactIds to point to the new copies
+    if (Object.keys(idMapping).length > 0 && multiState.front.length + multiState.back.length > 0) {
+      const updatedState = {
+        ...multiState,
+        front: multiState.front.map((l) => ({
+          ...l,
+          artifactId: idMapping[l.artifactId] || l.artifactId,
+        })),
+        back: multiState.back.map((l) => ({
+          ...l,
+          artifactId: idMapping[l.artifactId] || l.artifactId,
+        })),
+      };
+
+      await supabase
+        .from("design_sessions")
+        .update({ design_state: updatedState })
+        .eq("id", newSession.id);
+
+      newSession.design_state = updatedState;
     }
 
     // Create welcome message

@@ -10,7 +10,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserMenu } from "@/components/auth/UserMenu";
-import { DesignState, DEFAULT_DESIGN_STATE, designStateToTransform } from "@/lib/design-state";
+import {
+  type MultiSideDesignState,
+  migrateDesignState,
+  designStateToTransform,
+} from "@/lib/design-state";
 
 interface Session {
   id: string;
@@ -18,7 +22,7 @@ interface Session {
   is_public: boolean;
   share_slug: string;
   vibe_description: string | null;
-  design_state: DesignState | null;
+  design_state: unknown;
 }
 
 interface PrintfulColor {
@@ -42,12 +46,11 @@ export default function SharePage({ params }: PageProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isForking, setIsForking] = useState(false);
-  const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
   const [productImage, setProductImage] = useState<string>("");
   const [productColor, setProductColor] = useState<string>("#FFFFFF");
   const [selectedColor, setSelectedColor] = useState<PrintfulColor | null>(null);
   const [colors, setColors] = useState<PrintfulColor[]>([]);
-
+  const [viewSide, setViewSide] = useState<"front" | "back">("front");
 
   // Fetch session by share slug
   useEffect(() => {
@@ -98,10 +101,26 @@ export default function SharePage({ params }: PageProps) {
   const sessionId = session?.id;
   const { artifacts, latestArtifact } = useArtifacts(sessionId || null);
 
-  const designState = session?.design_state || DEFAULT_DESIGN_STATE;
-  const displayArtifact = selectedArtifact
-    ? artifacts.find((a) => a.id === selectedArtifact)
-    : latestArtifact;
+  // Migrate design state
+  const multiState: MultiSideDesignState = migrateDesignState(session?.design_state);
+
+  // Fill empty artifactIds from latest artifact (migration from old format)
+  const filledMultiState: MultiSideDesignState = {
+    ...multiState,
+    front: multiState.front.map((l) => ({
+      ...l,
+      artifactId: l.artifactId || latestArtifact?.id || "",
+    })),
+    back: multiState.back.map((l) => ({
+      ...l,
+      artifactId: l.artifactId || latestArtifact?.id || "",
+    })),
+  };
+
+  const currentLayers = filledMultiState[viewSide];
+  const sortedLayers = [...currentLayers].sort((a, b) => a.zIndex - b.zIndex);
+  const hasFrontLayers = filledMultiState.front.length > 0;
+  const hasBackLayers = filledMultiState.back.length > 0;
 
   const handleFork = async () => {
     if (!sessionId) return;
@@ -179,7 +198,7 @@ export default function SharePage({ params }: PageProps) {
         </div>
       </header>
 
-      {/* Main content - centered preview */}
+      {/* Main content */}
       <div className="flex-1 flex flex-col items-center justify-center p-6 gap-8 max-w-4xl mx-auto w-full">
         {/* Vibe description */}
         {session.vibe_description && (
@@ -195,27 +214,60 @@ export default function SharePage({ params }: PageProps) {
             <PhotoMockup
               color={productColor}
               productImage={productImage}
-              view="front"
+              view={viewSide}
               className="w-full"
             >
-              {displayArtifact && (
+              {sortedLayers.length > 0 && (
                 <div className="relative w-full h-full">
-                  <div
-                    className="absolute inset-0 flex items-center justify-center"
-                    style={{
-                      transform: designStateToTransform(designState),
-                    }}
-                  >
-                    <Image
-                      src={displayArtifact.storage_url}
-                      alt={displayArtifact.prompt || "Design"}
-                      fill
-                      className="object-contain pointer-events-none"
-                    />
-                  </div>
+                  {sortedLayers.map((layer) => {
+                    const artifact = artifacts.find((a) => a.id === layer.artifactId);
+                    if (!artifact) return null;
+                    return (
+                      <div
+                        key={layer.id}
+                        className="absolute inset-0 flex items-center justify-center"
+                        style={{
+                          transform: designStateToTransform(layer.designState),
+                          zIndex: layer.zIndex,
+                        }}
+                      >
+                        <Image
+                          src={artifact.storage_url}
+                          alt={artifact.prompt || "Design"}
+                          fill
+                          className="object-contain pointer-events-none"
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </PhotoMockup>
+
+            {/* Front/Back toggle */}
+            {(hasFrontLayers || hasBackLayers) && (
+              <div className="flex justify-center gap-2 mt-3">
+                {(["front", "back"] as const).map((side) => {
+                  const sideHasLayers = filledMultiState[side].length > 0;
+                  return (
+                    <button
+                      key={side}
+                      onClick={() => setViewSide(side)}
+                      className={`px-3 py-1 text-xs rounded-full border transition-all capitalize ${
+                        viewSide === side
+                          ? "border-primary bg-primary/5 text-primary"
+                          : "border-gray-200 text-muted-foreground hover:border-gray-400"
+                      }`}
+                    >
+                      {side}
+                      {sideHasLayers && (
+                        <span className="ml-1 text-[10px]">({filledMultiState[side].length})</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Color swatches */}
@@ -239,34 +291,6 @@ export default function SharePage({ params }: PageProps) {
                   title={color.name}
                 />
               ))}
-            </div>
-          )}
-
-          {/* Design thumbnails */}
-          {artifacts.filter((a) => a.type === "GENERATED" || a.type === "NORMALIZED").length > 1 && (
-            <div className="flex justify-center gap-2 mt-4">
-              {artifacts
-                .filter((a) => a.type === "GENERATED" || a.type === "NORMALIZED")
-                .slice(0, 5)
-                .map((a) => (
-                  <button
-                    key={a.id}
-                    onClick={() => setSelectedArtifact(a.id)}
-                    className={`w-12 h-12 rounded border-2 overflow-hidden transition-all ${
-                      displayArtifact?.id === a.id
-                        ? "border-primary"
-                        : "border-muted hover:border-muted-foreground"
-                    }`}
-                  >
-                    <Image
-                      src={a.storage_url}
-                      alt=""
-                      width={48}
-                      height={48}
-                      className="object-cover"
-                    />
-                  </button>
-                ))}
             </div>
           )}
         </div>

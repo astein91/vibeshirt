@@ -1,16 +1,17 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
+import { useState, useEffect, useCallback, use } from "react";
 import Link from "next/link";
 import { useMessages } from "@/hooks/useMessages";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import { ChatContainer } from "@/components/chat/ChatContainer";
 import { NamePrompt } from "@/components/chat/NamePrompt";
-import { CanvasPreview } from "@/components/design/CanvasPreview";
+import { InteractiveCanvas } from "@/components/design/InteractiveCanvas";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserMenu } from "@/components/auth/UserMenu";
+import { DesignState, DEFAULT_DESIGN_STATE } from "@/lib/design-state";
 
 interface Session {
   id: string;
@@ -31,6 +32,11 @@ export default function SharePage({ params }: PageProps) {
   const [error, setError] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
   const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
+  const [designState, setDesignState] = useState<DesignState>(DEFAULT_DESIGN_STATE);
+
+  const handleDesignStateChange = useCallback((newState: DesignState) => {
+    setDesignState(newState);
+  }, []);
 
   // Fetch session by share slug
   useEffect(() => {
@@ -161,9 +167,9 @@ export default function SharePage({ params }: PageProps) {
       {/* Main content */}
       <div className="flex-1 flex flex-col lg:flex-row">
         {/* Design preview panel */}
-        <div className="lg:w-1/2 border-b lg:border-b-0 lg:border-r p-6 flex flex-col">
+        <div className="lg:w-1/2 border-b lg:border-b-0 lg:border-r p-6 flex flex-col overflow-auto">
           <div className="flex-1 flex items-center justify-center">
-            <CanvasPreview
+            <InteractiveCanvas
               artifact={displayArtifact ? {
                 id: displayArtifact.id,
                 type: displayArtifact.type,
@@ -171,6 +177,8 @@ export default function SharePage({ params }: PageProps) {
                 prompt: displayArtifact.prompt,
                 metadata: displayArtifact.metadata as Record<string, unknown>,
               } : null}
+              designState={designState}
+              onDesignStateChange={handleDesignStateChange}
               recentArtifacts={artifacts
                 .filter((a) => a.type === "GENERATED" || a.type === "NORMALIZED")
                 .map((a) => ({

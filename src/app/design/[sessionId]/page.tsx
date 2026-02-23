@@ -300,14 +300,12 @@ export default function DesignSessionPage({ params }: PageProps) {
     setIsCreatingProduct(true);
 
     try {
-      const configResponse = await fetch("/api/printify/map-vibe", {
+      const configResponse = await fetch("/api/printful/map-vibe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           vibeDescription: session?.vibe_description || "custom design",
           artworkDescription: latestArtifact.prompt,
-          blueprintId: PRODUCT_ID,
-          colorName: selectedColor?.name,
         }),
       });
 
@@ -318,7 +316,7 @@ export default function DesignSessionPage({ params }: PageProps) {
 
       const config = await configResponse.json();
 
-      await fetch("/api/printify/create-product", {
+      await fetch("/api/printful/create-product", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -397,7 +395,7 @@ export default function DesignSessionPage({ params }: PageProps) {
               sessionStatus={session.status}
               hasGenerated={!!latestGenerated}
               hasNormalized={!!latestNormalized}
-              hasProduct={!!session.printify_product_id}
+              hasProduct={!!session.printful_product_id}
               isNormalizing={isNormalizing}
               isCreatingProduct={isCreatingProduct}
               onNormalize={handleNormalize}

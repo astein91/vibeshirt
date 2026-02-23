@@ -10,8 +10,8 @@ export interface Session {
   vibe_description: string | null;
   artwork_prompt: string | null;
   design_state: unknown;
-  printify_config: unknown;
-  printify_product_id: string | null;
+  printful_config: unknown;
+  printful_product_id: string | null;
   created_at: string;
   updated_at: string;
 }

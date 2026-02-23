@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { mapVibeToConfig } from "@/lib/vibe-mapper/mapper";
 
-// POST /api/printify/map-vibe - Map user vibe to Printify config
+// POST /api/printful/map-vibe - Map user vibe to Printful config
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();

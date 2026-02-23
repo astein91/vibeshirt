@@ -10,7 +10,6 @@ export interface Artifact {
   metadata: Record<string, unknown>;
   prompt: string | null;
   source_artifact_id: string | null;
-  printify_image_id: string | null;
   created_at: string;
 }
 

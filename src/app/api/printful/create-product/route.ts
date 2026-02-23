@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { inngest } from "@/inngest/client";
 
-// POST /api/printify/create-product - Create a Printify product
+// POST /api/printful/create-product - Create a Printful sync product
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
 
     // Trigger Inngest function
     await inngest.send({
-      name: "printify/create-product",
+      name: "printful/create-product",
       data: {
         jobId: job.id,
         sessionId: body.sessionId,

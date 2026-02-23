@@ -28,21 +28,18 @@ export type Events = {
       targetDpi: number;
     };
   };
-  "printify/create-product": {
+  "printful/create-product": {
     data: {
       jobId: string;
       sessionId: string;
       artifactId: string;
+      multiState: unknown;
       config: {
-        blueprintId: number;
-        printProviderId: number;
-        variants: Array<{
-          id: number;
-          price: number;
-          isEnabled: boolean;
-        }>;
+        productId: number;
         title: string;
         description: string;
+        variantIds: number[];
+        retailPrice: number; // cents
       };
     };
   };

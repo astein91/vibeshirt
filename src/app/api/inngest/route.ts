@@ -3,7 +3,7 @@ import { inngest } from "@/inngest/client";
 import {
   generateArtwork,
   normalizeArtwork,
-  createPrintifyProduct,
+  createPrintfulProduct,
   handleTailorMention,
 } from "@/inngest/functions";
 
@@ -13,7 +13,7 @@ export const { GET, POST, PUT } = serve({
   functions: [
     generateArtwork,
     normalizeArtwork,
-    createPrintifyProduct,
+    createPrintfulProduct,
     handleTailorMention,
   ],
 });

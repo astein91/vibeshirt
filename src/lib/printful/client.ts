@@ -117,6 +117,27 @@ class PrintfulClient {
       true // requires store ID
     );
   }
+
+  // Create a sync product in the store (requires store)
+  async createSyncProduct(body: SyncProductInput): Promise<SyncProduct> {
+    return this.request<SyncProduct>(
+      `/store/products`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      true // requires store ID
+    );
+  }
+
+  // Get a sync product from the store (requires store)
+  async getSyncProduct(id: number): Promise<SyncProduct> {
+    return this.request<SyncProduct>(
+      `/store/products/${id}`,
+      {},
+      true // requires store ID
+    );
+  }
 }
 
 // Type definitions
@@ -279,6 +300,36 @@ export interface VariantPrintfile {
 export interface VariantPlacement {
   printfile_id: number;
   technique?: string;
+}
+
+// Sync Products types
+
+export interface SyncProductFile {
+  url: string;
+  type: "front" | "back" | "label_outside" | "label_inside";
+}
+
+export interface SyncVariantInput {
+  variant_id: number;
+  retail_price: string; // e.g. "24.99"
+  files: SyncProductFile[];
+}
+
+export interface SyncProductInput {
+  sync_product: {
+    name: string;
+    thumbnail?: string;
+  };
+  sync_variants: SyncVariantInput[];
+}
+
+export interface SyncProduct {
+  id: number;
+  external_id: string;
+  name: string;
+  variants: number;
+  synced: number;
+  thumbnail_url: string | null;
 }
 
 // Singleton client instance

@@ -76,8 +76,8 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     if (body.artworkPrompt !== undefined) {
       updateData.artwork_prompt = body.artworkPrompt;
     }
-    if (body.printifyConfig !== undefined) {
-      updateData.printify_config = body.printifyConfig;
+    if (body.printfulConfig !== undefined) {
+      updateData.printful_config = body.printfulConfig;
     }
     if (body.status !== undefined) {
       updateData.status = body.status;

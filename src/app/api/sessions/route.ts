@@ -40,10 +40,29 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// GET /api/sessions - List all sessions (optional, for admin/debug)
-export async function GET() {
+// GET /api/sessions - List sessions or find by share slug
+export async function GET(request: NextRequest) {
   try {
     const supabase = createServiceClient();
+    const shareSlug = request.nextUrl.searchParams.get("shareSlug");
+
+    if (shareSlug) {
+      const { data: session, error } = await supabase
+        .from("design_sessions")
+        .select("*, messages(count), artifacts(count)")
+        .eq("share_slug", shareSlug)
+        .eq("is_public", true)
+        .single();
+
+      if (error || !session) {
+        return NextResponse.json(
+          { error: "Session not found" },
+          { status: 404 }
+        );
+      }
+
+      return NextResponse.json(session);
+    }
 
     const { data: sessions, error } = await supabase
       .from("design_sessions")

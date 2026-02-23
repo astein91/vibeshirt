@@ -48,17 +48,12 @@ export default function SharePage({ params }: PageProps) {
         }
         const data = await response.json();
 
-        // Find the session with matching share slug
-        const foundSession = Array.isArray(data)
-          ? data.find((s: Session) => s.share_slug === shareSlug)
-          : data;
-
-        if (!foundSession || !foundSession.is_public) {
+        if (!data || data.error) {
           setError("This session is not publicly shared");
           return;
         }
 
-        setSession(foundSession);
+        setSession(data);
       } catch {
         setError("Failed to load session");
       } finally {

@@ -181,8 +181,9 @@ export default function SharePage({ params }: PageProps) {
       {/* Header */}
       <header className="border-b bg-white px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Link href="/" className="font-bold text-lg">
-            Vibeshirt
+          <Link href="/" className="flex items-center gap-2">
+            <Image src="/logo.png" alt="Vibeshirting" width={28} height={28} className="rounded" />
+            <Image src="/wordmark.png" alt="Vibeshirting" width={120} height={28} className="object-contain" />
           </Link>
           <Badge variant="secondary">Shared Design</Badge>
         </div>

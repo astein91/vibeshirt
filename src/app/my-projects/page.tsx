@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import Image from "next/image";
 import { getUser } from "@/lib/supabase/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,8 +44,9 @@ export default async function MyProjectsPage() {
     <div className="min-h-screen bg-gradient-to-b from-background to-muted">
       <header className="border-b px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Link href="/" className="font-bold text-lg">
-            Vibeshirt
+          <Link href="/" className="flex items-center gap-2">
+            <Image src="/logo.png" alt="Vibeshirting" width={28} height={28} className="rounded" />
+            <Image src="/wordmark.png" alt="Vibeshirting" width={120} height={28} className="object-contain" />
           </Link>
         </div>
         <div className="flex items-center gap-2">

@@ -101,16 +101,16 @@ export async function POST(request: NextRequest) {
 
     // Update design_state layer artifactIds to point to the new copies
     if (Object.keys(idMapping).length > 0 && multiState.front.length + multiState.back.length > 0) {
+      const remapLayer = (l: (typeof multiState.front)[number]) => {
+        if ("artifactId" in l && l.artifactId) {
+          return { ...l, artifactId: idMapping[l.artifactId as string] || l.artifactId };
+        }
+        return l;
+      };
       const updatedState = {
         ...multiState,
-        front: multiState.front.map((l) => ({
-          ...l,
-          artifactId: idMapping[l.artifactId] || l.artifactId,
-        })),
-        back: multiState.back.map((l) => ({
-          ...l,
-          artifactId: idMapping[l.artifactId] || l.artifactId,
-        })),
+        front: multiState.front.map(remapLayer),
+        back: multiState.back.map(remapLayer),
       };
 
       await supabase

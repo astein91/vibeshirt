@@ -95,9 +95,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     // Always trigger AI response for user messages
     const cleanedContent = body.content.replace(/@tailor/gi, "").trim();
+    let intent: Awaited<ReturnType<typeof parseUserIntent>> | null = null;
 
     if (cleanedContent) {
-      const intent = await parseUserIntent(cleanedContent);
+      intent = await parseUserIntent(cleanedContent);
 
       const contextSummary = `
 Session vibe: ${session.vibe_description || "Not set yet"}
@@ -106,7 +107,21 @@ Recent artifacts: ${artifacts.length} images
 Status: ${session.status}
 `.trim();
 
-      if (intent.type === "generate" || intent.type === "modify") {
+      if (intent.type === "add_text") {
+        // Return text layer data so the client can create it
+        const textProps = intent.textProps || { text: "Your Text" };
+
+        await supabase.from("messages").insert({
+          session_id: sessionId,
+          role: "assistant",
+          author_name: "Tailor",
+          content: `Added text "${textProps.text}" to your design! You can drag it to reposition, or use the toolbar to customize the font, size, and color.`,
+          metadata: {
+            action: "add_text",
+            textProps,
+          },
+        });
+      } else if (intent.type === "generate" || intent.type === "modify") {
         const prompt = intent.prompt || cleanedContent;
         const isModification = intent.type === "modify";
 
@@ -199,6 +214,9 @@ Status: ${session.status}
     return NextResponse.json({
       message,
       aiTriggered: true,
+      ...(intent?.type === "add_text" && intent.textProps
+        ? { addText: intent.textProps }
+        : {}),
     }, { status: 201 });
   } catch (error) {
     console.error("Failed to create message:", error);

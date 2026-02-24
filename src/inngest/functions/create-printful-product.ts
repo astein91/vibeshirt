@@ -1,7 +1,10 @@
 import { inngest } from "../client";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getPrintfulClient, type SyncProductFile } from "@/lib/printful/client";
-import { type MultiSideDesignState, migrateDesignState, getAllArtifactIds } from "@/lib/design-state";
+import { type MultiSideDesignState, migrateDesignState, getAllArtifactIds, isTextLayer } from "@/lib/design-state";
+import { compositeDesignToImage } from "@/lib/image/composite";
+import { uploadToStorage, getPublicUrl } from "@/lib/storage/client";
+import { nanoid } from "nanoid";
 
 export const createPrintfulProduct = inngest.createFunction(
   { id: "create-printful-product" },
@@ -48,32 +51,53 @@ export const createPrintfulProduct = inngest.createFunction(
       return { success: false, error: "No artifacts found" };
     }
 
-    // Build artifact URL map (id -> public URL)
-    const artifactUrlMap: Record<string, string> = {};
+    // Build artifact map (id -> { storage_url, storage_key })
+    const artifactMap: Record<string, { storage_url: string; storage_key: string }> = {};
     for (const artifact of artifacts) {
-      artifactUrlMap[artifact.id] = artifact.storage_url.startsWith("http")
+      const url = artifact.storage_url.startsWith("http")
         ? artifact.storage_url
         : `${process.env.NEXT_PUBLIC_APP_URL}${artifact.storage_url}`;
+      artifactMap[artifact.id] = { storage_url: url, storage_key: artifact.storage_key };
     }
 
-    // Build files per side from multiState layers (use primary/first layer per side)
+    // Composite layers per side (handles text + image layers)
     const files: SyncProductFile[] = [];
+    const hasTextLayers = [...multiState.front, ...multiState.back].some(isTextLayer);
+    const hasMultipleLayers = multiState.front.length > 1 || multiState.back.length > 1;
 
-    for (const side of ["front", "back"] as const) {
-      const layers = multiState[side];
-      if (layers.length === 0) continue;
+    if (hasTextLayers || hasMultipleLayers) {
+      // Full compositing needed
+      for (const side of ["front", "back"] as const) {
+        const layers = multiState[side];
+        if (layers.length === 0) continue;
 
-      // Use first layer's artifact as the print file for this side
-      const primaryLayer = layers[0];
-      const url = artifactUrlMap[primaryLayer.artifactId];
-      if (url) {
+        // Composite and upload in the same step to avoid Buffer serialization issues
+        const url = await step.run(`composite-upload-${side}`, async () => {
+          const printArea = { width: 3591, height: 4364 };
+          const composited = await compositeDesignToImage(layers, artifactMap, printArea);
+          const key = `composited/${sessionId}/${side}-${nanoid()}.png`;
+          await uploadToStorage(key, composited, "image/png");
+          return getPublicUrl(key);
+        });
+
         files.push({ url, type: side });
+      }
+    } else {
+      // Simple case: single image layer per side, no compositing needed
+      for (const side of ["front", "back"] as const) {
+        const layers = multiState[side];
+        if (layers.length === 0) continue;
+        const primaryLayer = layers[0];
+        if ("artifactId" in primaryLayer) {
+          const info = artifactMap[primaryLayer.artifactId];
+          if (info) files.push({ url: info.storage_url, type: side });
+        }
       }
     }
 
     // Fallback: if no layers, use primary artifact on front
-    if (files.length === 0 && artifactUrlMap[artifactId]) {
-      files.push({ url: artifactUrlMap[artifactId], type: "front" });
+    if (files.length === 0 && artifactMap[artifactId]) {
+      files.push({ url: artifactMap[artifactId].storage_url, type: "front" });
     }
 
     // Create the sync product

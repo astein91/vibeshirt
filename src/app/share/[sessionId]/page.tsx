@@ -15,6 +15,7 @@ import {
   type MultiSideDesignState,
   migrateDesignState,
   designStateToTransform,
+  isImageLayer,
 } from "@/lib/design-state";
 import { DEFAULT_PRODUCT_ID } from "@/lib/printful/products";
 
@@ -107,17 +108,19 @@ export default function SharePage({ params }: PageProps) {
   // Migrate design state
   const multiState: MultiSideDesignState = migrateDesignState(session?.design_state);
 
-  // Fill empty artifactIds from latest artifact (migration from old format)
+  // Fill empty artifactIds from latest artifact (migration from old format, image layers only)
   const filledMultiState: MultiSideDesignState = {
     ...multiState,
-    front: multiState.front.map((l) => ({
-      ...l,
-      artifactId: l.artifactId || latestArtifact?.id || "",
-    })),
-    back: multiState.back.map((l) => ({
-      ...l,
-      artifactId: l.artifactId || latestArtifact?.id || "",
-    })),
+    front: multiState.front.map((l) =>
+      isImageLayer(l) && !l.artifactId && latestArtifact
+        ? { ...l, artifactId: latestArtifact.id }
+        : l
+    ),
+    back: multiState.back.map((l) =>
+      isImageLayer(l) && !l.artifactId && latestArtifact
+        ? { ...l, artifactId: latestArtifact.id }
+        : l
+    ),
   };
 
   const currentLayers = filledMultiState[viewSide];
@@ -228,6 +231,39 @@ export default function SharePage({ params }: PageProps) {
               {sortedLayers.length > 0 && (
                 <div className="relative w-full h-full">
                   {sortedLayers.map((layer) => {
+                    if (!isImageLayer(layer)) {
+                      // Render text layers on share page
+                      if (layer.type === "text") {
+                        return (
+                          <div
+                            key={layer.id}
+                            className="absolute inset-0 flex items-center justify-center"
+                            style={{
+                              transform: designStateToTransform(layer.designState),
+                              zIndex: layer.zIndex,
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontFamily: `"${layer.fontFamily}", sans-serif`,
+                                fontSize: `${layer.fontSize}px`,
+                                color: layer.fontColor,
+                                fontWeight: layer.fontWeight,
+                                fontStyle: layer.fontStyle,
+                                textAlign: layer.textAlign,
+                                letterSpacing: `${layer.letterSpacing}px`,
+                                whiteSpace: "pre-wrap",
+                                lineHeight: 1.2,
+                                textShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                              }}
+                            >
+                              {layer.text}
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }
                     const artifact = artifacts.find((a) => a.id === layer.artifactId);
                     if (!artifact) return null;
                     return (

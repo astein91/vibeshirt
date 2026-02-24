@@ -19,13 +19,19 @@ import { UserMenu } from "@/components/auth/UserMenu";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   type MultiSideDesignState,
+  type TextLayer,
   DEFAULT_DESIGN_STATE,
   applyPositionCommand,
   migrateDesignState,
   addLayerToSide,
+  addTextLayerToSide,
   removeLayerFromSide,
   updateLayerDesignState,
+  updateTextLayerProps,
+  isTextLayer,
+  isImageLayer,
 } from "@/lib/design-state";
+import { TextToolbar } from "@/components/design/TextToolbar";
 import { DEFAULT_PRODUCT_ID, type FitType, PRODUCTS, getFit } from "@/lib/printful/products";
 
 interface PageProps {
@@ -52,6 +58,7 @@ export default function DesignSessionPage({ params }: PageProps) {
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
   const [showNux, setShowNux] = useState(false);
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
 
   const vibeAutoSentRef = useRef(false);
   const mockupGeneratedForRef = useRef<string | null>(null);
@@ -108,9 +115,9 @@ export default function DesignSessionPage({ params }: PageProps) {
 
     for (const side of ["front", "back"] as const) {
       for (const layer of newState[side]) {
-        if (!layer.artifactId && latestArtifact) {
+        // Only backfill image layers that have no artifactId
+        if (isImageLayer(layer) && !layer.artifactId && latestArtifact) {
           newState = updateLayerDesignState(newState, side, layer.id, layer.designState);
-          // Need to set artifactId directly
           newState = {
             ...newState,
             [side]: newState[side].map((l) =>
@@ -151,10 +158,10 @@ export default function DesignSessionPage({ params }: PageProps) {
 
     let newState = multiState;
     for (const artifact of newArtifacts) {
-      if (artifact.type !== "GENERATED") continue;
+      if (artifact.type !== "GENERATED" && artifact.type !== "UPLOAD") continue;
       // Check if already a layer
       const alreadyLayer = [...newState.front, ...newState.back].some(
-        (l) => l.artifactId === artifact.id
+        (l) => isImageLayer(l) && l.artifactId === artifact.id
       );
       if (alreadyLayer) continue;
 
@@ -241,8 +248,30 @@ export default function DesignSessionPage({ params }: PageProps) {
   }, []);
 
   const handleRemoveLayer = useCallback((layerId: string) => {
+    if (selectedLayerId === layerId) setSelectedLayerId(null);
     setMultiState((prev) => removeLayerFromSide(prev, prev.activeSide, layerId));
+  }, [selectedLayerId]);
+
+  const handleAddTextLayer = useCallback(() => {
+    setMultiState((prev) => {
+      const newState = addTextLayerToSide(prev, prev.activeSide);
+      // Select the newly created text layer
+      const newLayers = newState[prev.activeSide];
+      const newest = newLayers[newLayers.length - 1];
+      if (newest) setTimeout(() => setSelectedLayerId(newest.id), 0);
+      return newState;
+    });
   }, []);
+
+  const handleUpdateTextLayer = useCallback(
+    (props: Partial<Omit<TextLayer, "id" | "type" | "designState" | "zIndex">>) => {
+      if (!selectedLayerId) return;
+      setMultiState((prev) =>
+        updateTextLayerProps(prev, prev.activeSide, selectedLayerId, props)
+      );
+    },
+    [selectedLayerId]
+  );
 
   const handleSendMessage = async (content: string) => {
     const lowerContent = content.toLowerCase();
@@ -268,7 +297,19 @@ export default function DesignSessionPage({ params }: PageProps) {
       }
     }
 
-    await sendMessage(content, DEFAULT_USER_NAME);
+    const result = await sendMessage(content, DEFAULT_USER_NAME);
+
+    // Handle add_text response from API
+    if (result?.addText) {
+      const textProps = result.addText as Partial<Omit<TextLayer, "id" | "type" | "designState" | "zIndex">>;
+      setMultiState((prev) => {
+        const newState = addTextLayerToSide(prev, prev.activeSide, textProps);
+        const newLayers = newState[prev.activeSide];
+        const newest = newLayers[newLayers.length - 1];
+        if (newest) setTimeout(() => setSelectedLayerId(newest.id), 0);
+        return newState;
+      });
+    }
   };
 
   const handleShare = async () => {
@@ -284,6 +325,15 @@ export default function DesignSessionPage({ params }: PageProps) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ productId: newProductId }),
     }).catch(() => {});
+  };
+
+  const handleFileUpload = async (file: File) => {
+    try {
+      await uploadArtifact(file);
+      // Auto-add as layer is handled by the artifact watcher effect
+    } catch (err) {
+      console.error("[Upload] Failed:", err);
+    }
   };
 
   const handleNormalize = async () => {
@@ -473,12 +523,12 @@ export default function DesignSessionPage({ params }: PageProps) {
             </div>
           </div>
 
-          <div className="flex-1 flex items-center justify-center">
+          <div className="flex-1 flex flex-col items-center justify-center gap-3">
             <InteractiveCanvas
               productId={productId}
               multiState={multiState}
               allArtifacts={artifacts
-                .filter((a) => a.type === "GENERATED")
+                .filter((a) => a.type === "GENERATED" || a.type === "UPLOAD")
                 .map((a) => ({
                   id: a.id,
                   type: a.type,
@@ -488,6 +538,9 @@ export default function DesignSessionPage({ params }: PageProps) {
                 }))}
               onMultiStateChange={handleMultiStateChange}
               onRemoveLayer={handleRemoveLayer}
+              onAddTextLayer={handleAddTextLayer}
+              selectedLayerId={selectedLayerId}
+              onSelectLayer={setSelectedLayerId}
               isLoading={artifactsLoading}
               onColorChange={(color) => setSelectedColor(color)}
               onPrintAreaChange={(area) => setPrintArea(area)}
@@ -499,6 +552,20 @@ export default function DesignSessionPage({ params }: PageProps) {
               }
               isMockupLoading={isMockupGenerating}
             />
+
+            {/* Text toolbar for selected text layer */}
+            {selectedLayerId && (() => {
+              const allLayers = [...multiState.front, ...multiState.back];
+              const layer = allLayers.find((l) => l.id === selectedLayerId);
+              if (!layer || !isTextLayer(layer)) return null;
+              return (
+                <TextToolbar
+                  layer={layer}
+                  onUpdate={handleUpdateTextLayer}
+                  onDelete={() => handleRemoveLayer(selectedLayerId)}
+                />
+              );
+            })()}
           </div>
         </div>
 
@@ -515,10 +582,11 @@ export default function DesignSessionPage({ params }: PageProps) {
             isLoading={isSending}
             userName={DEFAULT_USER_NAME}
             onSendMessage={handleSendMessage}
+            onFileSelect={handleFileUpload}
             onArtifactClick={(a) => {
               // Clicking an artifact in chat could add it as a layer
               const alreadyLayer = [...multiState.front, ...multiState.back].some(
-                (l) => l.artifactId === a.id
+                (l) => isImageLayer(l) && l.artifactId === a.id
               );
               if (!alreadyLayer) {
                 const side = multiState.activeSide;

@@ -190,11 +190,37 @@ export function deserializeCanvasState(json: string): CanvasState | null {
 
 // --- Multi-layer / multi-side types ---
 
-export interface Layer {
+export interface ImageLayer {
   id: string;
+  type: "image";
   artifactId: string;
   designState: DesignState;
   zIndex: number;
+}
+
+export interface TextLayer {
+  id: string;
+  type: "text";
+  designState: DesignState;
+  zIndex: number;
+  text: string;
+  fontFamily: string;
+  fontSize: number;
+  fontColor: string;
+  fontWeight: "normal" | "bold";
+  fontStyle: "normal" | "italic";
+  textAlign: "left" | "center" | "right";
+  letterSpacing: number;
+}
+
+export type Layer = ImageLayer | TextLayer;
+
+export function isTextLayer(layer: Layer): layer is TextLayer {
+  return layer.type === "text";
+}
+
+export function isImageLayer(layer: Layer): layer is ImageLayer {
+  return layer.type === "image" || !(layer as unknown as Record<string, unknown>).type;
 }
 
 export interface MultiSideDesignState {
@@ -225,9 +251,19 @@ export function migrateDesignState(raw: unknown): MultiSideDesignState {
 
   const obj = raw as Record<string, unknown>;
 
-  // Already v2
+  // Already v2 — backfill type:"image" on layers missing it
   if (obj.version === 2 && Array.isArray(obj.front) && Array.isArray(obj.back)) {
-    return obj as unknown as MultiSideDesignState;
+    const backfill = (layers: unknown[]) =>
+      layers.map((l: unknown) => {
+        const layer = l as Record<string, unknown>;
+        if (!layer.type) return { ...layer, type: "image" };
+        return layer;
+      });
+    return {
+      ...obj,
+      front: backfill(obj.front as unknown[]),
+      back: backfill(obj.back as unknown[]),
+    } as unknown as MultiSideDesignState;
   }
 
   // Old single-design format: { x, y, scale, rotation, ... }
@@ -245,6 +281,7 @@ export function migrateDesignState(raw: unknown): MultiSideDesignState {
       front: [
         {
           id: nanoid(8),
+          type: "image" as const,
           artifactId: "", // caller fills this from latestArtifact
           designState: legacyState,
           zIndex: 0,
@@ -257,7 +294,7 @@ export function migrateDesignState(raw: unknown): MultiSideDesignState {
   return { ...DEFAULT_MULTI_STATE, front: [], back: [] };
 }
 
-/** Add a new layer to a side. Returns unchanged state if at max capacity. */
+/** Add a new image layer to a side. Returns unchanged state if at max capacity. */
 export function addLayerToSide(
   state: MultiSideDesignState,
   side: "front" | "back",
@@ -267,14 +304,71 @@ export function addLayerToSide(
   if (layers.length >= MAX_LAYERS_PER_SIDE) return state;
 
   const maxZ = layers.reduce((max, l) => Math.max(max, l.zIndex), -1);
-  const newLayer: Layer = {
+  const newLayer: ImageLayer = {
     id: nanoid(8),
+    type: "image",
     artifactId,
     designState: { ...DEFAULT_DESIGN_STATE },
     zIndex: maxZ + 1,
   };
 
   return { ...state, [side]: [...layers, newLayer] };
+}
+
+/** Default text layer properties */
+export const DEFAULT_TEXT_PROPS: Omit<TextLayer, "id" | "designState" | "zIndex"> = {
+  type: "text",
+  text: "Your Text",
+  fontFamily: "Inter",
+  fontSize: 32,
+  fontColor: "#FFFFFF",
+  fontWeight: "bold",
+  fontStyle: "normal",
+  textAlign: "center",
+  letterSpacing: 0,
+};
+
+/** Add a new text layer to a side. */
+export function addTextLayerToSide(
+  state: MultiSideDesignState,
+  side: "front" | "back",
+  textProps?: Partial<Omit<TextLayer, "id" | "type" | "designState" | "zIndex">>
+): MultiSideDesignState {
+  const layers = state[side];
+  if (layers.length >= MAX_LAYERS_PER_SIDE) return state;
+
+  const maxZ = layers.reduce((max, l) => Math.max(max, l.zIndex), -1);
+  const newLayer: TextLayer = {
+    id: nanoid(8),
+    type: "text",
+    designState: { ...DEFAULT_DESIGN_STATE },
+    zIndex: maxZ + 1,
+    text: textProps?.text ?? DEFAULT_TEXT_PROPS.text,
+    fontFamily: textProps?.fontFamily ?? DEFAULT_TEXT_PROPS.fontFamily,
+    fontSize: textProps?.fontSize ?? DEFAULT_TEXT_PROPS.fontSize,
+    fontColor: textProps?.fontColor ?? DEFAULT_TEXT_PROPS.fontColor,
+    fontWeight: textProps?.fontWeight ?? DEFAULT_TEXT_PROPS.fontWeight,
+    fontStyle: textProps?.fontStyle ?? DEFAULT_TEXT_PROPS.fontStyle,
+    textAlign: textProps?.textAlign ?? DEFAULT_TEXT_PROPS.textAlign,
+    letterSpacing: textProps?.letterSpacing ?? DEFAULT_TEXT_PROPS.letterSpacing,
+  };
+
+  return { ...state, [side]: [...layers, newLayer] };
+}
+
+/** Update text-specific properties on a text layer. */
+export function updateTextLayerProps(
+  state: MultiSideDesignState,
+  side: "front" | "back",
+  layerId: string,
+  props: Partial<Omit<TextLayer, "id" | "type" | "designState" | "zIndex">>
+): MultiSideDesignState {
+  return {
+    ...state,
+    [side]: state[side].map((l) =>
+      l.id === layerId && isTextLayer(l) ? { ...l, ...props } : l
+    ),
+  };
 }
 
 /** Remove a layer by ID. */
@@ -301,11 +395,11 @@ export function updateLayerDesignState(
   };
 }
 
-/** Get all unique artifact IDs across both sides. */
+/** Get all unique artifact IDs across both sides (image layers only). */
 export function getAllArtifactIds(state: MultiSideDesignState): string[] {
   const ids = new Set<string>();
   for (const l of [...state.front, ...state.back]) {
-    if (l.artifactId) ids.add(l.artifactId);
+    if (isImageLayer(l) && l.artifactId) ids.add(l.artifactId);
   }
   return Array.from(ids);
 }

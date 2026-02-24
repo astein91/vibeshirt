@@ -17,6 +17,7 @@ import {
   type DesignState,
   type MultiSideDesignState,
   type Layer,
+  type TextLayer,
   DEFAULT_DESIGN_STATE,
   MAX_SCALE,
   MIN_SCALE,
@@ -24,8 +25,12 @@ import {
   designStateToTransform,
   updateLayerDesignState,
   removeLayerFromSide,
+  isTextLayer,
+  isImageLayer,
 } from "@/lib/design-state";
 import { PhotoMockup } from "./PhotoMockup";
+import { TextLayerPreview } from "./TextLayerPreview";
+import { Type } from "lucide-react";
 
 interface Artifact {
   id: string;
@@ -74,6 +79,9 @@ interface InteractiveCanvasProps {
   onMultiStateChange: (state: MultiSideDesignState) => void;
   onRemoveLayer: (layerId: string) => void;
   onAddLayerRequest?: () => void;
+  onAddTextLayer?: () => void;
+  selectedLayerId?: string | null;
+  onSelectLayer?: (layerId: string | null) => void;
   isLoading?: boolean;
   productId: number;
   onColorChange?: (color: PrintfulColor) => void;
@@ -96,8 +104,9 @@ const FALLBACK_COLORS: PrintfulColor[] = [
 
 const MAX_LAYERS_PER_SIDE = 3;
 
-/** Find artifact URL from allArtifacts by layer's artifactId */
+/** Find artifact URL from allArtifacts by layer's artifactId (image layers only) */
 function getArtifactForLayer(layer: Layer, allArtifacts: Artifact[]): Artifact | undefined {
+  if (!isImageLayer(layer)) return undefined;
   return allArtifacts.find((a) => a.id === layer.artifactId);
 }
 
@@ -107,6 +116,9 @@ export function InteractiveCanvas({
   onMultiStateChange,
   onRemoveLayer,
   onAddLayerRequest,
+  onAddTextLayer,
+  selectedLayerId,
+  onSelectLayer,
   isLoading = false,
   productId,
   onColorChange,
@@ -246,10 +258,24 @@ export function InteractiveCanvas({
 
       for (const layer of layers) {
         const ds = layer.designState;
-        // Layer center is at (ds.x%, ds.y%) of the design area
-        // Layer takes up roughly 80% of area at scale 1, so half-extent is 40% * scale
-        const halfW = 40 * ds.scale;
-        const halfH = 40 * ds.scale;
+        let halfW: number;
+        let halfH: number;
+
+        if (isTextLayer(layer)) {
+          // Text layers: estimate bounding box from text length and font size
+          const charWidth = layer.fontSize * 0.6;
+          const lines = layer.text.split("\n");
+          const maxLineLen = Math.max(...lines.map((l) => l.length), 1);
+          const textWidthPct = (maxLineLen * charWidth * ds.scale / (designAreaRef.current?.offsetWidth || 300)) * 100;
+          const textHeightPct = (lines.length * layer.fontSize * 1.3 * ds.scale / (designAreaRef.current?.offsetHeight || 300)) * 100;
+          halfW = Math.max(textWidthPct / 2, 10);
+          halfH = Math.max(textHeightPct / 2, 8);
+        } else {
+          // Image layers: 80% of area at scale 1, half-extent is 40% * scale
+          halfW = 40 * ds.scale;
+          halfH = 40 * ds.scale;
+        }
+
         if (
           clickXPct >= ds.x - halfW &&
           clickXPct <= ds.x + halfW &&
@@ -271,7 +297,15 @@ export function InteractiveCanvas({
       e.preventDefault();
 
       const hitLayer = hitTestLayer(e.clientX, e.clientY);
-      if (!hitLayer) return;
+      if (!hitLayer) {
+        onSelectLayer?.(null);
+        return;
+      }
+
+      // Select text layers on click
+      if (isTextLayer(hitLayer)) {
+        onSelectLayer?.(hitLayer.id);
+      }
 
       draggedLayerIdRef.current = hitLayer.id;
       setIsDragging(true);
@@ -282,7 +316,7 @@ export function InteractiveCanvas({
         stateY: hitLayer.designState.y,
       });
     },
-    [hasLayers, hitTestLayer]
+    [hasLayers, hitTestLayer, onSelectLayer]
   );
 
   const handleMouseMove = useCallback(
@@ -595,6 +629,7 @@ export function InteractiveCanvas({
               {isLoading ? (
                 <Skeleton className="w-3/4 h-3/4 rounded" />
               ) : hasLayers ? (
+                /* Click on empty space deselects */
                 <div
                   ref={designAreaRef}
                   className={cn(
@@ -607,7 +642,19 @@ export function InteractiveCanvas({
                   onTouchEnd={handleTouchEnd}
                 >
                   {sortedLayers.map((layer) => {
-                    const artifact = getArtifactForLayer(layer, allArtifacts);
+                    if (isTextLayer(layer)) {
+                      return (
+                        <TextLayerPreview
+                          key={layer.id}
+                          layer={layer}
+                          isDragging={isDragging}
+                          isBeingDragged={isDragging && draggedLayerIdRef.current === layer.id}
+                          isSelected={selectedLayerId === layer.id}
+                          onSelect={() => onSelectLayer?.(layer.id)}
+                        />
+                      );
+                    }
+                    const artifact = isImageLayer(layer) ? getArtifactForLayer(layer, allArtifacts) : undefined;
                     if (!artifact) return null;
                     return (
                       <div
@@ -642,12 +689,20 @@ export function InteractiveCanvas({
                 </div>
               ) : (
                 <div className="flex items-center justify-center w-full h-full text-muted-foreground/40">
-                  <div className="text-center">
+                  <div className="text-center space-y-2">
                     <p className="text-sm font-medium">Design Area</p>
                     {frontPrintArea && (
-                      <p className="text-xs mt-1">
+                      <p className="text-xs">
                         {frontPrintArea.width} x {frontPrintArea.height}px
                       </p>
+                    )}
+                    {onAddTextLayer && (
+                      <button
+                        onClick={onAddTextLayer}
+                        className="inline-flex items-center gap-1 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                      >
+                        <Type className="w-3 h-3" /> Add text
+                      </button>
                     )}
                   </div>
                 </div>
@@ -676,7 +731,31 @@ export function InteractiveCanvas({
       {(hasLayers || multiState.front.length > 0 || multiState.back.length > 0) && (
         <div className="flex justify-center items-center gap-2">
           {sortedLayers.map((layer) => {
-            const artifact = getArtifactForLayer(layer, allArtifacts);
+            if (isTextLayer(layer)) {
+              return (
+                <div key={layer.id} className="relative group">
+                  <button
+                    onClick={() => onSelectLayer?.(selectedLayerId === layer.id ? null : layer.id)}
+                    className={cn(
+                      "w-10 h-10 rounded border-2 overflow-hidden flex items-center justify-center",
+                      selectedLayerId === layer.id ? "border-primary ring-1 ring-primary/30" : "border-muted"
+                    )}
+                    style={{ backgroundColor: layer.fontColor + "15" }}
+                    title={`Text: ${layer.text}`}
+                  >
+                    <Type className="w-5 h-5" style={{ color: layer.fontColor === "#FFFFFF" ? "#888" : layer.fontColor }} />
+                  </button>
+                  <button
+                    onClick={() => onRemoveLayer(layer.id)}
+                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-destructive text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Remove layer"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                </div>
+              );
+            }
+            const artifact = isImageLayer(layer) ? getArtifactForLayer(layer, allArtifacts) : undefined;
             if (!artifact) return null;
             return (
               <div key={layer.id} className="relative group">
@@ -699,14 +778,27 @@ export function InteractiveCanvas({
               </div>
             );
           })}
-          {currentSideLayers.length < MAX_LAYERS_PER_SIDE && onAddLayerRequest && (
-            <button
-              onClick={onAddLayerRequest}
-              className="w-10 h-10 rounded border-2 border-dashed border-muted-foreground/30 flex items-center justify-center text-muted-foreground/50 hover:border-muted-foreground/60 hover:text-muted-foreground/80 transition-colors"
-              title="Add design layer"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
+          {currentSideLayers.length < MAX_LAYERS_PER_SIDE && (
+            <div className="flex items-center gap-1">
+              {onAddLayerRequest && (
+                <button
+                  onClick={onAddLayerRequest}
+                  className="w-10 h-10 rounded border-2 border-dashed border-muted-foreground/30 flex items-center justify-center text-muted-foreground/50 hover:border-muted-foreground/60 hover:text-muted-foreground/80 transition-colors"
+                  title="Add design layer"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              )}
+              {onAddTextLayer && (
+                <button
+                  onClick={onAddTextLayer}
+                  className="w-10 h-10 rounded border-2 border-dashed border-muted-foreground/30 flex items-center justify-center text-muted-foreground/50 hover:border-muted-foreground/60 hover:text-muted-foreground/80 transition-colors"
+                  title="Add text layer"
+                >
+                  <Type className="w-4 h-4" />
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

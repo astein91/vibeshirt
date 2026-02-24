@@ -28,6 +28,7 @@ interface ChatContainerProps {
   isLoading: boolean;
   userName: string;
   onSendMessage: (content: string) => void;
+  onFileSelect?: (file: File) => void;
   onArtifactClick?: (artifact: Artifact) => void;
 }
 
@@ -37,6 +38,7 @@ export function ChatContainer({
   isLoading,
   userName,
   onSendMessage,
+  onFileSelect,
   onArtifactClick,
 }: ChatContainerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -87,6 +89,7 @@ export function ChatContainer({
           <ChatInput
             userName={userName}
             onSend={onSendMessage}
+            onFileSelect={onFileSelect}
             placeholder="Describe your design or ask for changes..."
           />
         </div>

@@ -216,13 +216,24 @@ IMPORTANT: The background MUST be solid ${CHROMA_KEY_HEX} magenta with no patter
   }
 }
 
+// Extracted text layer properties from chat
+export interface TextCommandProps {
+  text: string;
+  fontColor?: string;
+  fontWeight?: "normal" | "bold";
+  fontStyle?: "normal" | "italic";
+  fontSize?: number;
+  fontFamily?: string;
+}
+
 // Parse user intent from a message
 export interface ParsedIntent {
-  type: "generate" | "modify" | "position" | "question" | "other";
+  type: "generate" | "modify" | "position" | "add_text" | "question" | "other";
   prompt?: string;
   modifications?: string[];
   question?: string;
   positionChanges?: DesignPositionCommand;
+  textProps?: TextCommandProps;
 }
 
 // Design position command from natural language
@@ -247,7 +258,17 @@ export async function parseUserIntent(message: string): Promise<ParsedIntent> {
   ];
   const hasPositionIntent = positionKeywords.some(kw => lowerMessage.includes(kw));
 
+  // Check for "add text" intent
+  const hasTextIntent = lowerMessage.includes("add text") || lowerMessage.includes("write text") || lowerMessage.includes("put text");
+
   if (!model) {
+    // Fallback: add_text detection
+    if (hasTextIntent) {
+      return {
+        type: "add_text",
+        textProps: parseTextCommand(message),
+      };
+    }
     // Fallback to simple keyword detection
     if (hasPositionIntent && !lowerMessage.includes("design") && !lowerMessage.includes("create")) {
       return {
@@ -288,7 +309,7 @@ Message: "${message}"
 
 Respond in JSON format only:
 {
-  "type": "generate" | "modify" | "position" | "question" | "other",
+  "type": "generate" | "modify" | "position" | "add_text" | "question" | "other",
   "prompt": "the full design prompt if type is generate",
   "modifications": ["list of modifications if type is modify"],
   "question": "the question if type is question",
@@ -299,15 +320,29 @@ Respond in JSON format only:
     "scale": <number multiplier, 1 = 100%, 0.5 = 50%, 2 = 200%>,
     "rotation": <number in degrees>,
     "preset": "center" | "top" | "bottom" | "left" | "right" | "fill" | "fit"
+  },
+  "textProps": {
+    "text": "the text content to add",
+    "fontColor": "CSS color (e.g. #FF0000 for red)",
+    "fontWeight": "normal" | "bold",
+    "fontStyle": "normal" | "italic",
+    "fontSize": <number in px>,
+    "fontFamily": "font name"
   }
 }
 
 Intent types:
-- "generate": User wants to create a new design from scratch
+- "generate": User wants to create a new design from scratch (artwork/image)
 - "modify": User wants to change the artwork itself (colors, elements, style)
 - "position": User wants to move, resize, or rotate the design placement on the shirt
+- "add_text": User wants to add text/words/letters onto the shirt (NOT an image, just text overlay)
 - "question": User is asking a question
 - "other": General conversation or unclear intent
+
+add_text examples:
+- "add text HELLO in red bold" → add_text with text: "HELLO", fontColor: "#FF0000", fontWeight: "bold"
+- "write VIBESHIRTING in white italic" → add_text with text: "VIBESHIRTING", fontColor: "#FFFFFF", fontStyle: "italic"
+- "put text NYC on it" → add_text with text: "NYC"
 
 Position examples:
 - "move it up" → position with y: 30, preset: "top"
@@ -322,7 +357,12 @@ Position examples:
     // Extract JSON from response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]) as ParsedIntent;
+      const parsed = JSON.parse(jsonMatch[0]) as ParsedIntent;
+      // For add_text, ensure we have textProps
+      if (parsed.type === "add_text" && !parsed.textProps) {
+        parsed.textProps = parseTextCommand(message);
+      }
+      return parsed;
     }
 
     return { type: "other" };
@@ -374,6 +414,41 @@ function parseSimplePositionCommand(message: string): DesignPositionCommand {
   }
 
   return { action: "center", preset: "center" };
+}
+
+// Parse text properties from a natural language command (fallback)
+function parseTextCommand(message: string): TextCommandProps {
+  const lower = message.toLowerCase();
+
+  // Extract text content — look for quoted text first, then after "text" keyword
+  let text = "Your Text";
+  const quotedMatch = message.match(/["']([^"']+)["']/);
+  if (quotedMatch) {
+    text = quotedMatch[1];
+  } else {
+    const afterText = message.match(/(?:add|write|put)\s+text\s+(.+?)(?:\s+in\s+|\s+with\s+|$)/i);
+    if (afterText) {
+      text = afterText[1].replace(/\s+(bold|italic|red|blue|green|white|black|yellow|orange|purple|pink)\b.*$/i, "").trim();
+    }
+  }
+
+  // Detect color
+  const colorMap: Record<string, string> = {
+    red: "#EF4444", blue: "#3B82F6", green: "#22C55E", white: "#FFFFFF",
+    black: "#000000", yellow: "#EAB308", orange: "#F97316", purple: "#8B5CF6",
+    pink: "#EC4899", cyan: "#14B8A6",
+  };
+  let fontColor: string | undefined;
+  for (const [name, hex] of Object.entries(colorMap)) {
+    if (lower.includes(name)) { fontColor = hex; break; }
+  }
+
+  return {
+    text,
+    fontColor,
+    fontWeight: lower.includes("bold") ? "bold" : undefined,
+    fontStyle: lower.includes("italic") ? "italic" : undefined,
+  };
 }
 
 // Generate a conversational response

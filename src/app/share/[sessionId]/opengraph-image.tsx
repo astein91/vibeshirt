@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 import { createServiceClient } from "@/lib/supabase/server";
-import { migrateDesignState } from "@/lib/design-state";
+import { migrateDesignState, isImageLayer } from "@/lib/design-state";
 
 export const runtime = "nodejs";
 export const size = { width: 1200, height: 630 };
@@ -76,15 +76,16 @@ export default async function OGImage({
 
     // Determine which artwork images to fetch
     const artworkUrlsToFetch: Array<{ url: string; artifactId: string }> = [];
-    if (frontLayers.length > 0) {
-      for (const layer of frontLayers) {
+    const frontImageLayers = frontLayers.filter(isImageLayer);
+    if (frontImageLayers.length > 0) {
+      for (const layer of frontImageLayers) {
         const artifact = artifacts?.find((a) => a.id === layer.artifactId);
         if (artifact) {
           artworkUrlsToFetch.push({ url: artifact.storage_url, artifactId: artifact.id });
         }
       }
       // If layer has empty artifactId (migrated from old format), use latest artifact
-      if (artworkUrlsToFetch.length === 0 && frontLayers.some((l) => !l.artifactId)) {
+      if (artworkUrlsToFetch.length === 0 && frontImageLayers.some((l) => !l.artifactId)) {
         const fallbackArtifact =
           artifacts?.find((a) => a.type === "NORMALIZED") ||
           artifacts?.find((a) => a.type === "GENERATED");
@@ -125,8 +126,8 @@ export default async function OGImage({
       height: number;
     }> = [];
 
-    if (frontLayers.length > 0) {
-      for (const layer of frontLayers) {
+    if (frontImageLayers.length > 0) {
+      for (const layer of frontImageLayers) {
         const artData = artworkDataUrls.find((a) => a.artifactId === layer.artifactId)
           || artworkDataUrls[0]; // fallback for migrated empty artifactId
         if (!artData) continue;

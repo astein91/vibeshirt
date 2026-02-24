@@ -15,6 +15,7 @@ import { ShareButton } from "@/components/share/ShareButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserMenu } from "@/components/auth/UserMenu";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   type MultiSideDesignState,
   DEFAULT_DESIGN_STATE,
@@ -385,6 +386,7 @@ export default function DesignSessionPage({ params }: PageProps) {
             isPublic={session.is_public}
             onShare={handleShare}
           />
+          <ThemeToggle />
           <UserMenu />
         </div>
       </header>

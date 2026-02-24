@@ -8,6 +8,7 @@ import { useArtifacts } from "@/hooks/useArtifacts";
 import { PhotoMockup } from "@/components/design/PhotoMockup";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserMenu } from "@/components/auth/UserMenu";
 import {
@@ -198,6 +199,7 @@ export default function SharePage({ params }: PageProps) {
           >
             {isForking ? "Creating..." : "Remix This Design"}
           </Button>
+          <ThemeToggle />
           <UserMenu />
         </div>
       </header>

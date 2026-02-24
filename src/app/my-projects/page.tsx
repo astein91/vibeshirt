@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { UserMenu } from "@/components/auth/UserMenu";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export default async function MyProjectsPage() {
   const user = await getUser();
@@ -57,6 +58,7 @@ export default async function MyProjectsPage() {
               + New Design
             </Button>
           </Link>
+          <ThemeToggle />
           <UserMenu />
         </div>
       </header>

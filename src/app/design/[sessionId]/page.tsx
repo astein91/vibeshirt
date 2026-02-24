@@ -364,18 +364,18 @@ export default function DesignSessionPage({ params }: PageProps) {
   return (
     <div className="min-h-screen flex flex-col">
       {/* Header */}
-      <header className="border-b px-4 py-3 flex items-center justify-between">
+      <header className="border-b border-border/50 px-5 py-3 flex items-center justify-between bg-card/80 backdrop-blur-md">
         <div className="flex items-center gap-4">
-          <Link href="/" className="flex items-center gap-2">
-            <Image src="/logo.png" alt="Vibeshirting" width={28} height={28} className="rounded" />
-            <span className="text-lg font-extrabold italic bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text text-transparent">
+          <Link href="/" className="flex items-center gap-2.5 group">
+            <Image src="/logo.png" alt="Vibeshirting" width={30} height={30} className="rounded-lg ring-1 ring-neon-purple/30 group-hover:ring-neon-pink/50 transition-all" />
+            <span className="text-lg font-extrabold italic gradient-text">
               Vibeshirting
             </span>
           </Link>
         </div>
         <div className="flex items-center gap-2">
           <Link href="/">
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" className="border-neon-cyan/30 text-neon-cyan hover:bg-neon-cyan/10 hover:border-neon-cyan/50">
               + New Design
             </Button>
           </Link>
@@ -392,7 +392,7 @@ export default function DesignSessionPage({ params }: PageProps) {
       {/* Main content */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         {/* Design preview panel */}
-        <div className="lg:w-1/2 border-b lg:border-b-0 lg:border-r p-6 flex flex-col overflow-auto">
+        <div className="lg:w-1/2 border-b lg:border-b-0 lg:border-r border-border/50 p-6 flex flex-col overflow-auto synthwave-grid">
           {/* Workflow Stepper */}
           <div className="mb-4">
             <WorkflowStepper

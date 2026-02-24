@@ -70,19 +70,19 @@ export function ChatContainer({
 
           {isLoading && (
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm">
+              <div className="w-8 h-8 rounded-full bg-neon-purple/20 border border-neon-purple/30 flex items-center justify-center text-sm text-neon-purple">
                 T
               </div>
               <div className="flex-1 space-y-2">
-                <Skeleton className="h-4 w-3/4" />
-                <Skeleton className="h-4 w-1/2" />
+                <Skeleton className="h-4 w-3/4 bg-muted" />
+                <Skeleton className="h-4 w-1/2 bg-muted" />
               </div>
             </div>
           )}
         </div>
       </ScrollArea>
 
-      <div className="border-t p-4">
+      <div className="border-t border-border/50 p-4 bg-card/50">
         <div className="max-w-2xl mx-auto">
           <ChatInput
             userName={userName}

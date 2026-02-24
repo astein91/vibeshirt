@@ -54,9 +54,10 @@ export function MessageBubble({
       <Avatar className="w-8 h-8">
         <AvatarFallback
           className={cn(
+            "text-xs font-bold",
             isAssistant
-              ? "bg-primary text-primary-foreground"
-              : "bg-muted text-muted-foreground"
+              ? "bg-neon-purple/20 text-neon-purple border border-neon-purple/30"
+              : "bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/30"
           )}
         >
           {initials}
@@ -70,16 +71,16 @@ export function MessageBubble({
         )}
       >
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-medium">{authorName}</span>
+          <span className={cn("font-medium", isAssistant ? "text-neon-purple/70" : "text-neon-cyan/70")}>{authorName}</span>
           <span>{timeAgo}</span>
         </div>
 
         <div
           className={cn(
-            "rounded-lg px-3 py-2 text-sm",
+            "rounded-xl px-3.5 py-2.5 text-sm leading-relaxed",
             isAssistant
-              ? "bg-muted text-foreground"
-              : "bg-primary text-primary-foreground"
+              ? "bg-card border border-border/50 text-foreground"
+              : "bg-neon-pink/15 border border-neon-pink/20 text-foreground"
           )}
         >
           {message.content}
@@ -89,7 +90,7 @@ export function MessageBubble({
         {artifact && (
           <button
             onClick={() => onArtifactClick?.(artifact)}
-            className="mt-2 rounded-lg overflow-hidden border hover:border-primary transition-colors"
+            className="mt-2 rounded-xl overflow-hidden border border-neon-purple/30 hover:border-neon-pink/50 transition-all hover:glow-purple"
           >
             <Image
               src={artifact.storage_url}

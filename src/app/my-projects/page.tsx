@@ -42,18 +42,18 @@ export default async function MyProjectsPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-muted">
-      <header className="border-b px-4 py-3 flex items-center justify-between">
+      <header className="border-b border-border/50 px-5 py-3 flex items-center justify-between bg-card/80 backdrop-blur-md">
         <div className="flex items-center gap-4">
-          <Link href="/" className="flex items-center gap-2">
-            <Image src="/logo.png" alt="Vibeshirting" width={28} height={28} className="rounded" />
-            <span className="text-lg font-extrabold italic bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text text-transparent">
+          <Link href="/" className="flex items-center gap-2.5 group">
+            <Image src="/logo.png" alt="Vibeshirting" width={30} height={30} className="rounded-lg ring-1 ring-neon-purple/30 group-hover:ring-neon-pink/50 transition-all" />
+            <span className="text-lg font-extrabold italic gradient-text">
               Vibeshirting
             </span>
           </Link>
         </div>
         <div className="flex items-center gap-2">
           <Link href="/">
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" className="border-neon-cyan/30 text-neon-cyan hover:bg-neon-cyan/10 hover:border-neon-cyan/50">
               + New Design
             </Button>
           </Link>

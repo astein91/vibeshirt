@@ -177,23 +177,24 @@ export default function SharePage({ params }: PageProps) {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50">
+    <div className="min-h-screen flex flex-col">
       {/* Header */}
-      <header className="border-b bg-white px-4 py-3 flex items-center justify-between">
+      <header className="border-b border-border/50 px-5 py-3 flex items-center justify-between bg-card/80 backdrop-blur-md">
         <div className="flex items-center gap-4">
-          <Link href="/" className="flex items-center gap-2">
-            <Image src="/logo.png" alt="Vibeshirting" width={28} height={28} className="rounded" />
-            <span className="text-lg font-extrabold italic bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text text-transparent">
+          <Link href="/" className="flex items-center gap-2.5 group">
+            <Image src="/logo.png" alt="Vibeshirting" width={30} height={30} className="rounded-lg ring-1 ring-neon-purple/30 group-hover:ring-neon-pink/50 transition-all" />
+            <span className="text-lg font-extrabold italic gradient-text">
               Vibeshirting
             </span>
           </Link>
-          <Badge variant="secondary">Shared Design</Badge>
+          <Badge variant="secondary" className="border-neon-cyan/30 text-neon-cyan bg-neon-cyan/10">Shared Design</Badge>
         </div>
         <div className="flex items-center gap-2">
           <Button
             onClick={handleFork}
             disabled={isForking}
             size="sm"
+            className="bg-neon-pink hover:bg-neon-pink/80 text-background glow-pink"
           >
             {isForking ? "Creating..." : "Remix This Design"}
           </Button>

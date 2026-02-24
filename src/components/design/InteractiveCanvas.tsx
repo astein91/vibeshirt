@@ -30,6 +30,7 @@ import {
 } from "@/lib/design-state";
 import { PhotoMockup } from "./PhotoMockup";
 import { TextLayerPreview } from "./TextLayerPreview";
+import { TextToolbar } from "./TextToolbar";
 import { Type } from "lucide-react";
 
 interface Artifact {
@@ -82,6 +83,7 @@ interface InteractiveCanvasProps {
   onAddTextLayer?: () => void;
   selectedLayerId?: string | null;
   onSelectLayer?: (layerId: string | null) => void;
+  onUpdateTextLayer?: (props: Partial<Omit<TextLayer, "id" | "type" | "designState" | "zIndex">>) => void;
   isLoading?: boolean;
   productId: number;
   onColorChange?: (color: PrintfulColor) => void;
@@ -119,6 +121,7 @@ export function InteractiveCanvas({
   onAddTextLayer,
   selectedLayerId,
   onSelectLayer,
+  onUpdateTextLayer,
   isLoading = false,
   productId,
   onColorChange,
@@ -665,6 +668,7 @@ export function InteractiveCanvas({
                           isBeingDragged={isDragging && draggedLayerIdRef.current === layer.id}
                           isSelected={selectedLayerId === layer.id}
                           onSelect={() => onSelectLayer?.(layer.id)}
+                          onTextChange={(text) => onUpdateTextLayer?.({ text })}
                         />
                       );
                     }
@@ -742,6 +746,21 @@ export function InteractiveCanvas({
             <Type className="w-4 h-4" />
           </button>
         )}
+
+        {/* Floating text toolbar */}
+        {selectedLayerId && onUpdateTextLayer && (() => {
+          const layer = currentSideLayers.find((l) => l.id === selectedLayerId);
+          if (!layer || !isTextLayer(layer)) return null;
+          return (
+            <div className="absolute top-3 left-3 right-14 z-20">
+              <TextToolbar
+                layer={layer}
+                onUpdate={onUpdateTextLayer}
+                onDelete={() => onRemoveLayer(selectedLayerId)}
+              />
+            </div>
+          );
+        })()}
       </div>
 
       {/* Layer indicator panel */}

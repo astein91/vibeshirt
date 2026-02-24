@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, useEffect, useCallback } from "react";
 import { type TextLayer, designStateToTransform } from "@/lib/design-state";
 
 interface TextLayerPreviewProps {
@@ -8,6 +9,7 @@ interface TextLayerPreviewProps {
   isBeingDragged: boolean;
   isSelected: boolean;
   onSelect: () => void;
+  onTextChange?: (text: string) => void;
 }
 
 export function TextLayerPreview({
@@ -16,7 +18,40 @@ export function TextLayerPreview({
   isBeingDragged,
   isSelected,
   onSelect,
+  onTextChange,
 }: TextLayerPreviewProps) {
+  const editableRef = useRef<HTMLDivElement>(null);
+
+  // Focus the contentEditable when selected
+  useEffect(() => {
+    if (isSelected && editableRef.current) {
+      editableRef.current.focus();
+      // Place cursor at end
+      const sel = window.getSelection();
+      if (sel) {
+        sel.selectAllChildren(editableRef.current);
+        sel.collapseToEnd();
+      }
+    }
+  }, [isSelected]);
+
+  const handleInput = useCallback(() => {
+    if (editableRef.current && onTextChange) {
+      const text = editableRef.current.innerText;
+      onTextChange(text);
+    }
+  }, [onTextChange]);
+
+  // Prevent Enter from creating <div> tags — use plain newlines
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      document.execCommand("insertLineBreak");
+    }
+    // Stop propagation so canvas shortcuts don't fire while typing
+    e.stopPropagation();
+  }, []);
+
   return (
     <div
       className="absolute inset-0 flex items-center justify-center"
@@ -27,11 +62,22 @@ export function TextLayerPreview({
       }}
     >
       <div
-        className="pointer-events-auto cursor-move select-none"
+        ref={editableRef}
+        contentEditable={isSelected}
+        suppressContentEditableWarning
+        onInput={handleInput}
+        onKeyDown={isSelected ? handleKeyDown : undefined}
+        onMouseDown={(e) => {
+          if (isSelected) {
+            // When already editing, let the cursor be placed without starting a drag
+            e.stopPropagation();
+          }
+        }}
         onClick={(e) => {
           e.stopPropagation();
           onSelect();
         }}
+        className={isSelected ? "pointer-events-auto cursor-text" : "pointer-events-auto cursor-move select-none"}
         style={{
           fontFamily: `"${layer.fontFamily}", sans-serif`,
           fontSize: `${layer.fontSize}px`,
@@ -46,7 +92,9 @@ export function TextLayerPreview({
           outline: isSelected ? "2px solid rgba(139, 92, 246, 0.8)" : "none",
           outlineOffset: "4px",
           borderRadius: "2px",
-          padding: "2px 4px",
+          padding: "2px 6px",
+          minWidth: "20px",
+          caretColor: layer.fontColor,
         }}
       >
         {layer.text || "Your Text"}

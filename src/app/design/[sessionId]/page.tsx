@@ -31,7 +31,6 @@ import {
   isTextLayer,
   isImageLayer,
 } from "@/lib/design-state";
-import { TextToolbar } from "@/components/design/TextToolbar";
 import { DEFAULT_PRODUCT_ID, type FitType, PRODUCTS, getFit } from "@/lib/printful/products";
 
 interface PageProps {
@@ -541,6 +540,7 @@ export default function DesignSessionPage({ params }: PageProps) {
               onAddTextLayer={handleAddTextLayer}
               selectedLayerId={selectedLayerId}
               onSelectLayer={setSelectedLayerId}
+              onUpdateTextLayer={handleUpdateTextLayer}
               isLoading={artifactsLoading}
               onColorChange={(color) => setSelectedColor(color)}
               onPrintAreaChange={(area) => setPrintArea(area)}
@@ -552,20 +552,6 @@ export default function DesignSessionPage({ params }: PageProps) {
               }
               isMockupLoading={isMockupGenerating}
             />
-
-            {/* Text toolbar for selected text layer */}
-            {selectedLayerId && (() => {
-              const allLayers = [...multiState.front, ...multiState.back];
-              const layer = allLayers.find((l) => l.id === selectedLayerId);
-              if (!layer || !isTextLayer(layer)) return null;
-              return (
-                <TextToolbar
-                  layer={layer}
-                  onUpdate={handleUpdateTextLayer}
-                  onDelete={() => handleRemoveLayer(selectedLayerId)}
-                />
-              );
-            })()}
           </div>
         </div>
 

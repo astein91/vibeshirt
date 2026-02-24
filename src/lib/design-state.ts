@@ -332,7 +332,8 @@ export const DEFAULT_TEXT_PROPS: Omit<TextLayer, "id" | "designState" | "zIndex"
 export function addTextLayerToSide(
   state: MultiSideDesignState,
   side: "front" | "back",
-  textProps?: Partial<Omit<TextLayer, "id" | "type" | "designState" | "zIndex">>
+  textProps?: Partial<Omit<TextLayer, "id" | "type" | "designState" | "zIndex">>,
+  designStateOverride?: Partial<DesignState>
 ): MultiSideDesignState {
   const layers = state[side];
   if (layers.length >= MAX_LAYERS_PER_SIDE) return state;
@@ -341,7 +342,7 @@ export function addTextLayerToSide(
   const newLayer: TextLayer = {
     id: nanoid(8),
     type: "text",
-    designState: { ...DEFAULT_DESIGN_STATE },
+    designState: { ...DEFAULT_DESIGN_STATE, ...designStateOverride },
     zIndex: maxZ + 1,
     text: textProps?.text ?? DEFAULT_TEXT_PROPS.text,
     fontFamily: textProps?.fontFamily ?? DEFAULT_TEXT_PROPS.fontFamily,

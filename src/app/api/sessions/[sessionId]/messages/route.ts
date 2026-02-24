@@ -111,11 +111,15 @@ Status: ${session.status}
         // Return text layer data so the client can create it
         const textProps = intent.textProps || { text: "Your Text" };
 
+        const posDesc = textProps.positionHint?.relative && textProps.positionHint?.referenceText
+          ? ` I've placed it ${textProps.positionHint.relative === "below" ? "below" : textProps.positionHint.relative === "above" ? "above" : textProps.positionHint.relative === "left_of" ? "to the left of" : "to the right of"} "${textProps.positionHint.referenceText}".`
+          : "";
+
         await supabase.from("messages").insert({
           session_id: sessionId,
           role: "assistant",
           author_name: "Tailor",
-          content: `Added text "${textProps.text}" to your design! You can drag it to reposition, or use the toolbar to customize the font, size, and color.`,
+          content: `Added "${textProps.text}" to your design!${posDesc} You can drag it to reposition, or use the toolbar to customize the font, size, and color.`,
           metadata: {
             action: "add_text",
             textProps,

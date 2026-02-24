@@ -20,6 +20,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   type MultiSideDesignState,
   type TextLayer,
+  type DesignState,
   DEFAULT_DESIGN_STATE,
   applyPositionCommand,
   migrateDesignState,
@@ -31,6 +32,7 @@ import {
   isTextLayer,
   isImageLayer,
 } from "@/lib/design-state";
+import type { PositionHint } from "@/lib/gemini/generate";
 import { DEFAULT_PRODUCT_ID, type FitType, PRODUCTS, getFit } from "@/lib/printful/products";
 
 interface PageProps {
@@ -300,9 +302,12 @@ export default function DesignSessionPage({ params }: PageProps) {
 
     // Handle add_text response from API
     if (result?.addText) {
-      const textProps = result.addText as Partial<Omit<TextLayer, "id" | "type" | "designState" | "zIndex">>;
+      const textProps = result.addText as Partial<Omit<TextLayer, "id" | "type" | "designState" | "zIndex">> & { positionHint?: PositionHint };
+      const { positionHint, ...styleProps } = textProps;
+
       setMultiState((prev) => {
-        const newState = addTextLayerToSide(prev, prev.activeSide, textProps);
+        const designOverride = resolvePositionHint(positionHint, prev);
+        const newState = addTextLayerToSide(prev, prev.activeSide, styleProps, designOverride);
         const newLayers = newState[prev.activeSide];
         const newest = newLayers[newLayers.length - 1];
         if (newest) setTimeout(() => setSelectedLayerId(newest.id), 0);
@@ -601,6 +606,57 @@ export default function DesignSessionPage({ params }: PageProps) {
       ) : null}
     </div>
   );
+}
+
+// Resolve a position hint from chat into a design state override
+function resolvePositionHint(
+  hint: PositionHint | undefined,
+  state: MultiSideDesignState
+): Partial<DesignState> | undefined {
+  if (!hint) return undefined;
+
+  const layers = state[state.activeSide];
+
+  // Absolute positioning (e.g. "at the top")
+  if (!hint.relative) {
+    const override: Partial<DesignState> = {};
+    if (hint.x !== undefined) override.x = hint.x;
+    if (hint.y !== undefined) override.y = hint.y;
+    return Object.keys(override).length > 0 ? override : undefined;
+  }
+
+  // Relative positioning — find the reference layer
+  if (hint.referenceText) {
+    const refLower = hint.referenceText.toLowerCase().trim();
+    const refLayer = layers.find((l) => {
+      if (!isTextLayer(l)) return false;
+      return l.text.toLowerCase().includes(refLower) || refLower.includes(l.text.toLowerCase());
+    });
+
+    if (refLayer) {
+      const ref = refLayer.designState;
+      // Offset by ~15% of the print area for clear visual separation
+      const offset = 12;
+      switch (hint.relative) {
+        case "below":
+          return { x: ref.x, y: Math.min(ref.y + offset, 95) };
+        case "above":
+          return { x: ref.x, y: Math.max(ref.y - offset, 5) };
+        case "left_of":
+          return { x: Math.max(ref.x - 20, 5), y: ref.y };
+        case "right_of":
+          return { x: Math.min(ref.x + 20, 95), y: ref.y };
+      }
+    }
+  }
+
+  // Fallback: if no reference found, use sensible defaults for the direction
+  switch (hint.relative) {
+    case "below": return { y: 62 };
+    case "above": return { y: 38 };
+    case "left_of": return { x: 30 };
+    case "right_of": return { x: 70 };
+  }
 }
 
 // Simple position command parser

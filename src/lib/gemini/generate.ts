@@ -216,6 +216,14 @@ IMPORTANT: The background MUST be solid ${CHROMA_KEY_HEX} magenta with no patter
   }
 }
 
+// Position hint extracted from natural language
+export interface PositionHint {
+  relative?: "above" | "below" | "left_of" | "right_of";
+  referenceText?: string; // text content of the layer to position relative to
+  x?: number; // absolute position (0-100)
+  y?: number;
+}
+
 // Extracted text layer properties from chat
 export interface TextCommandProps {
   text: string;
@@ -224,6 +232,7 @@ export interface TextCommandProps {
   fontStyle?: "normal" | "italic";
   fontSize?: number;
   fontFamily?: string;
+  positionHint?: PositionHint;
 }
 
 // Parse user intent from a message
@@ -258,8 +267,9 @@ export async function parseUserIntent(message: string): Promise<ParsedIntent> {
   ];
   const hasPositionIntent = positionKeywords.some(kw => lowerMessage.includes(kw));
 
-  // Check for "add text" intent
-  const hasTextIntent = lowerMessage.includes("add text") || lowerMessage.includes("write text") || lowerMessage.includes("put text");
+  // Check for "add text" intent — also match "put 'X' under/above Y" patterns
+  const hasTextIntent = lowerMessage.includes("add text") || lowerMessage.includes("write text") || lowerMessage.includes("put text")
+    || /(?:put|add|write)\s+["'].+["']/.test(lowerMessage);
 
   if (!model) {
     // Fallback: add_text detection
@@ -327,7 +337,13 @@ Respond in JSON format only:
     "fontWeight": "normal" | "bold",
     "fontStyle": "normal" | "italic",
     "fontSize": <number in px>,
-    "fontFamily": "font name"
+    "fontFamily": "font name",
+    "positionHint": {
+      "relative": "above" | "below" | "left_of" | "right_of",
+      "referenceText": "text content of existing layer to position relative to",
+      "x": <number 0-100 absolute horizontal position>,
+      "y": <number 0-100 absolute vertical position>
+    }
   }
 }
 
@@ -343,6 +359,12 @@ add_text examples:
 - "add text HELLO in red bold" → add_text with text: "HELLO", fontColor: "#FF0000", fontWeight: "bold"
 - "write VIBESHIRTING in white italic" → add_text with text: "VIBESHIRTING", fontColor: "#FFFFFF", fontStyle: "italic"
 - "put text NYC on it" → add_text with text: "NYC"
+- "put 'call tim' under call jack" → add_text with text: "call tim", positionHint: { relative: "below", referenceText: "call jack" }
+- "add SALE above the logo text" → add_text with text: "SALE", positionHint: { relative: "above", referenceText: "logo" }
+- "put hello at the top" → add_text with text: "hello", positionHint: { y: 25 }
+- "write NYC at the bottom" → add_text with text: "NYC", positionHint: { y: 75 }
+
+Position hints: Use "relative" + "referenceText" when the user references an existing text element (e.g. "under X", "above Y", "next to Z"). Use absolute x/y (0-100) for general position words (top=25, bottom=75, left=30, right=70, center=50).
 
 Position examples:
 - "move it up" → position with y: 30, preset: "top"
@@ -426,7 +448,7 @@ function parseTextCommand(message: string): TextCommandProps {
   if (quotedMatch) {
     text = quotedMatch[1];
   } else {
-    const afterText = message.match(/(?:add|write|put)\s+text\s+(.+?)(?:\s+in\s+|\s+with\s+|$)/i);
+    const afterText = message.match(/(?:add|write|put)\s+(?:text\s+)?(.+?)(?:\s+in\s+|\s+with\s+|\s+under\s+|\s+above\s+|\s+below\s+|\s+next\s+to\s+|\s+at\s+the\s+|$)/i);
     if (afterText) {
       text = afterText[1].replace(/\s+(bold|italic|red|blue|green|white|black|yellow|orange|purple|pink)\b.*$/i, "").trim();
     }
@@ -443,12 +465,42 @@ function parseTextCommand(message: string): TextCommandProps {
     if (lower.includes(name)) { fontColor = hex; break; }
   }
 
+  // Extract position hints
+  const positionHint = parsePositionHint(lower);
+
   return {
     text,
     fontColor,
     fontWeight: lower.includes("bold") ? "bold" : undefined,
     fontStyle: lower.includes("italic") ? "italic" : undefined,
+    positionHint,
   };
+}
+
+// Extract relative or absolute position hints from natural language
+function parsePositionHint(lower: string): PositionHint | undefined {
+  // Relative positioning: "under X", "below X", "above X", "next to X", "left of X", "right of X"
+  const relativePatterns: { pattern: RegExp; direction: PositionHint["relative"] }[] = [
+    { pattern: /(?:under|below|beneath)\s+(?:the\s+)?(?:text\s+)?["']?(.+?)["']?\s*$/, direction: "below" },
+    { pattern: /(?:above|over|on top of)\s+(?:the\s+)?(?:text\s+)?["']?(.+?)["']?\s*$/, direction: "above" },
+    { pattern: /(?:left of|to the left of)\s+(?:the\s+)?(?:text\s+)?["']?(.+?)["']?\s*$/, direction: "left_of" },
+    { pattern: /(?:right of|to the right of|next to)\s+(?:the\s+)?(?:text\s+)?["']?(.+?)["']?\s*$/, direction: "right_of" },
+  ];
+
+  for (const { pattern, direction } of relativePatterns) {
+    const match = lower.match(pattern);
+    if (match) {
+      return { relative: direction, referenceText: match[1].trim() };
+    }
+  }
+
+  // Absolute positioning: "at the top", "at the bottom", etc.
+  if (/\bat the top\b/.test(lower)) return { y: 25 };
+  if (/\bat the bottom\b/.test(lower)) return { y: 75 };
+  if (/\bon the left\b/.test(lower)) return { x: 30 };
+  if (/\bon the right\b/.test(lower)) return { x: 70 };
+
+  return undefined;
 }
 
 // Generate a conversational response

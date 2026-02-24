@@ -61,6 +61,10 @@ export default function DesignSessionPage({ params }: PageProps) {
   const [showNux, setShowNux] = useState(false);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
 
+  // Undo stack — stores previous multiState snapshots (max 30)
+  const undoStackRef = useRef<MultiSideDesignState[]>([]);
+  const isUndoingRef = useRef(false);
+
   const vibeAutoSentRef = useRef(false);
   const mockupGeneratedForRef = useRef<string | null>(null);
   const seenArtifactIdsRef = useRef<Set<string>>(new Set());
@@ -244,19 +248,61 @@ export default function DesignSessionPage({ params }: PageProps) {
     localStorage.setItem(getNuxDismissedKey(sessionId), "1");
   };
 
-  const handleMultiStateChange = useCallback((newState: MultiSideDesignState) => {
-    setMultiState(newState);
+  // Push to undo stack before applying a state change
+  const pushUndo = useCallback((current: MultiSideDesignState) => {
+    if (isUndoingRef.current) return;
+    undoStackRef.current = [...undoStackRef.current.slice(-29), current];
   }, []);
+
+  const handleUndo = useCallback(() => {
+    const stack = undoStackRef.current;
+    if (stack.length === 0) return;
+    isUndoingRef.current = true;
+    const prev = stack[stack.length - 1];
+    undoStackRef.current = stack.slice(0, -1);
+    setMultiState(prev);
+    // Allow undo stack pushes again after this tick
+    setTimeout(() => { isUndoingRef.current = false; }, 0);
+  }, []);
+
+  const handleMultiStateChange = useCallback((newState: MultiSideDesignState) => {
+    setMultiState((prev) => {
+      pushUndo(prev);
+      return newState;
+    });
+  }, [pushUndo]);
+
+  // Ctrl+Z / Cmd+Z undo handler
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [handleUndo]);
 
   const handleRemoveLayer = useCallback((layerId: string) => {
     if (selectedLayerId === layerId) setSelectedLayerId(null);
-    setMultiState((prev) => removeLayerFromSide(prev, prev.activeSide, layerId));
-  }, [selectedLayerId]);
+    setMultiState((prev) => {
+      pushUndo(prev);
+      return removeLayerFromSide(prev, prev.activeSide, layerId);
+    });
+  }, [selectedLayerId, pushUndo]);
 
   const handleAddTextLayer = useCallback(() => {
     setMultiState((prev) => {
-      const newState = addTextLayerToSide(prev, prev.activeSide);
-      // Select the newly created text layer
+      // Offset new text layers so they don't stack directly on top of images
+      // Place below center if there are existing layers, or slightly above center if first
+      const existingLayers = prev[prev.activeSide];
+      const hasImageLayer = existingLayers.some((l) => isImageLayer(l));
+      const existingTextCount = existingLayers.filter((l) => isTextLayer(l)).length;
+      const yOffset = hasImageLayer ? 72 + existingTextCount * 10 : 50 + existingTextCount * 12;
+      const newState = addTextLayerToSide(prev, prev.activeSide, undefined, {
+        y: Math.min(yOffset, 90),
+      });
       const newLayers = newState[prev.activeSide];
       const newest = newLayers[newLayers.length - 1];
       if (newest) setTimeout(() => setSelectedLayerId(newest.id), 0);

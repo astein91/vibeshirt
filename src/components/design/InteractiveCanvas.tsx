@@ -265,14 +265,18 @@ export function InteractiveCanvas({
         let halfH: number;
 
         if (isTextLayer(layer)) {
-          // Text layers: estimate bounding box from text length and font size
-          const charWidth = layer.fontSize * 0.6;
+          // Text layers: use generous hit area based on text content
+          // Measure in percentage of design area with a generous minimum
+          const elW = el.offsetWidth || 300;
+          const elH = el.offsetHeight || 300;
+          const charWidth = layer.fontSize * 0.65;
           const lines = layer.text.split("\n");
-          const maxLineLen = Math.max(...lines.map((l) => l.length), 1);
-          const textWidthPct = (maxLineLen * charWidth * ds.scale / (designAreaRef.current?.offsetWidth || 300)) * 100;
-          const textHeightPct = (lines.length * layer.fontSize * 1.3 * ds.scale / (designAreaRef.current?.offsetHeight || 300)) * 100;
-          halfW = Math.max(textWidthPct / 2, 10);
-          halfH = Math.max(textHeightPct / 2, 8);
+          const maxLineLen = Math.max(...lines.map((l) => l.length), 3);
+          const textWidthPct = (maxLineLen * charWidth * ds.scale / elW) * 100;
+          const textHeightPct = (lines.length * layer.fontSize * 1.4 * ds.scale / elH) * 100;
+          // Generous minimum hit area: at least 15% x 10% of design area
+          halfW = Math.max(textWidthPct / 2, 15);
+          halfH = Math.max(textHeightPct / 2, 10);
         } else {
           // Image layers: 80% of area at scale 1, half-extent is 40% * scale
           halfW = 40 * ds.scale;
@@ -301,7 +305,6 @@ export function InteractiveCanvas({
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (!hasLayers) return;
-      e.preventDefault();
 
       const hitLayer = hitTestLayer(e.clientX, e.clientY);
       if (!hitLayer) {
@@ -309,8 +312,14 @@ export function InteractiveCanvas({
         return;
       }
 
+      // If clicking an already-selected text layer, don't start drag — let contentEditable handle it
+      if (isTextLayer(hitLayer) && selectedLayerId === hitLayer.id) {
+        return;
+      }
+
+      e.preventDefault();
       didDragRef.current = false;
-      pendingSelectRef.current = isTextLayer(hitLayer) ? hitLayer.id : null;
+      pendingSelectRef.current = hitLayer.id;
 
       draggedLayerIdRef.current = hitLayer.id;
       setIsDragging(true);
@@ -321,7 +330,7 @@ export function InteractiveCanvas({
         stateY: hitLayer.designState.y,
       });
     },
-    [hasLayers, hitTestLayer, onSelectLayer]
+    [hasLayers, hitTestLayer, onSelectLayer, selectedLayerId]
   );
 
   const handleMouseMove = useCallback(
@@ -363,7 +372,7 @@ export function InteractiveCanvas({
   );
 
   const handleMouseUp = useCallback(() => {
-    // If the user clicked without dragging, select the text layer
+    // If the user clicked without dragging, select the layer
     if (!didDragRef.current && pendingSelectRef.current) {
       onSelectLayer?.(pendingSelectRef.current);
     }
@@ -706,8 +715,8 @@ export function InteractiveCanvas({
                   )}
                 </div>
               ) : (
-                <div className="flex items-center justify-center w-full h-full text-muted-foreground/40">
-                  <div className="text-center">
+                <div className="flex items-center justify-center w-full h-full text-muted-foreground/30 animate-in fade-in duration-500">
+                  <div className="text-center border-2 border-dashed border-muted-foreground/15 rounded-lg px-6 py-4">
                     <p className="text-sm font-medium">Design Area</p>
                     {frontPrintArea && (
                       <p className="text-xs mt-1">
@@ -721,13 +730,19 @@ export function InteractiveCanvas({
           )}
         </div>
 
-        {/* Position indicator (shows first dragged layer or topmost) */}
+        {/* Position indicator — shows selected layer info or topmost */}
         {hasLayers && (() => {
-          const topLayer = sortedLayers[sortedLayers.length - 1];
-          const ds = topLayer?.designState;
+          const targetLayer = selectedLayerId
+            ? currentSideLayers.find((l) => l.id === selectedLayerId)
+            : sortedLayers[sortedLayers.length - 1];
+          const ds = targetLayer?.designState;
           if (!ds) return null;
+          const label = targetLayer && isTextLayer(targetLayer)
+            ? `"${targetLayer.text.slice(0, 12)}${targetLayer.text.length > 12 ? "..." : ""}"`
+            : selectedLayerId ? "image" : "";
           return (
             <div className="absolute bottom-3 left-3 text-[10px] text-muted-foreground bg-background/80 px-2 py-1 rounded font-mono">
+              {label && <span className="mr-1.5 opacity-70">{label}</span>}
               {Math.round(ds.x)}%, {Math.round(ds.y)}% .{" "}
               {Math.round(ds.scale * 100)}%
               {ds.rotation !== 0 && ` . ${ds.rotation}\u00b0`}
@@ -740,10 +755,10 @@ export function InteractiveCanvas({
         {onAddTextLayer && currentSideLayers.length < MAX_LAYERS_PER_SIDE && (
           <button
             onClick={onAddTextLayer}
-            className="absolute bottom-3 right-3 z-10 w-8 h-8 rounded-lg bg-background/80 hover:bg-background border border-border/50 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors shadow-sm"
+            className="absolute bottom-3 right-3 z-10 w-9 h-9 rounded-lg bg-background hover:bg-primary/10 border-2 border-border hover:border-primary/50 flex items-center justify-center text-foreground hover:text-primary transition-all shadow-md"
             title="Add text layer"
           >
-            <Type className="w-4 h-4" />
+            <Type className="w-4.5 h-4.5" />
           </button>
         )}
 
@@ -773,13 +788,16 @@ export function InteractiveCanvas({
                   <button
                     onClick={() => onSelectLayer?.(selectedLayerId === layer.id ? null : layer.id)}
                     className={cn(
-                      "w-10 h-10 rounded border-2 overflow-hidden flex items-center justify-center",
+                      "w-10 h-10 rounded border-2 overflow-hidden flex flex-col items-center justify-center gap-0",
                       selectedLayerId === layer.id ? "border-primary ring-1 ring-primary/30" : "border-muted"
                     )}
                     style={{ backgroundColor: layer.fontColor + "15" }}
                     title={`Text: ${layer.text}`}
                   >
-                    <Type className="w-5 h-5" style={{ color: layer.fontColor === "#FFFFFF" ? "#888" : layer.fontColor }} />
+                    <Type className="w-3.5 h-3.5 shrink-0" style={{ color: layer.fontColor === "#FFFFFF" ? "#888" : layer.fontColor }} />
+                    <span className="text-[7px] leading-tight truncate max-w-[36px] text-muted-foreground">
+                      {layer.text.slice(0, 6)}
+                    </span>
                   </button>
                   <button
                     onClick={() => onRemoveLayer(layer.id)}

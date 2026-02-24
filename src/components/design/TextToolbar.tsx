@@ -34,7 +34,8 @@ export function TextToolbar({ layer, onUpdate, onDelete }: TextToolbarProps) {
   const fontsRef = useRef<HTMLDivElement>(null);
   const colorsRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdowns on outside click
+  // Close dropdowns on outside click — use click (not mousedown) to avoid
+  // conflicts with the toolbar's onMouseDown stopPropagation
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (showFonts && fontsRef.current && !fontsRef.current.contains(e.target as Node)) {
@@ -44,8 +45,8 @@ export function TextToolbar({ layer, onUpdate, onDelete }: TextToolbarProps) {
         setShowColors(false);
       }
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("click", handler, true);
+    return () => document.removeEventListener("click", handler, true);
   }, [showFonts, showColors]);
 
   const fontLabel = FONTS.find((f) => f.family === layer.fontFamily)?.label || layer.fontFamily;
@@ -63,10 +64,10 @@ export function TextToolbar({ layer, onUpdate, onDelete }: TextToolbarProps) {
           style={{ fontFamily: `"${layer.fontFamily}", sans-serif` }}
         >
           {fontLabel}
-          <ChevronDown className="w-3 h-3 shrink-0" />
+          <ChevronDown className={cn("w-3 h-3 shrink-0 transition-transform", showFonts && "rotate-180")} />
         </button>
         {showFonts && (
-          <div className="absolute z-50 bottom-full left-0 mb-1 bg-card border border-border rounded-lg shadow-xl max-h-48 w-44 overflow-auto">
+          <div className="absolute z-50 top-full left-0 mt-1 bg-card border border-border rounded-lg shadow-xl max-h-52 w-44 overflow-auto">
             {FONTS.map((font) => (
               <button
                 key={font.family}
@@ -157,7 +158,7 @@ export function TextToolbar({ layer, onUpdate, onDelete }: TextToolbarProps) {
           }}
         />
         {showColors && (
-          <div className="absolute z-50 bottom-full right-0 mb-1 bg-card border border-border rounded-lg shadow-xl p-2">
+          <div className="absolute z-50 top-full right-0 mt-1 bg-card border border-border rounded-lg shadow-xl p-2">
             <div className="grid grid-cols-5 gap-1.5 mb-2">
               {PRESET_COLORS.map((color) => (
                 <button

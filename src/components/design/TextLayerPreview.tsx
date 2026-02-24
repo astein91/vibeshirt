@@ -21,12 +21,22 @@ export function TextLayerPreview({
   onTextChange,
 }: TextLayerPreviewProps) {
   const editableRef = useRef<HTMLDivElement>(null);
+  // Track whether the latest text change came from local typing
+  const isLocalEdit = useRef(false);
+
+  // Set initial content and sync from external changes (chat commands, etc.)
+  // Skip when the change came from local typing to avoid clobbering the cursor
+  useEffect(() => {
+    if (editableRef.current && !isLocalEdit.current) {
+      editableRef.current.innerText = layer.text || "Your Text";
+    }
+    isLocalEdit.current = false;
+  }, [layer.text]);
 
   // Focus the contentEditable when selected
   useEffect(() => {
     if (isSelected && editableRef.current) {
       editableRef.current.focus();
-      // Place cursor at end
       const sel = window.getSelection();
       if (sel) {
         sel.selectAllChildren(editableRef.current);
@@ -37,18 +47,16 @@ export function TextLayerPreview({
 
   const handleInput = useCallback(() => {
     if (editableRef.current && onTextChange) {
-      const text = editableRef.current.innerText;
-      onTextChange(text);
+      isLocalEdit.current = true;
+      onTextChange(editableRef.current.innerText);
     }
   }, [onTextChange]);
 
-  // Prevent Enter from creating <div> tags — use plain newlines
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
       document.execCommand("insertLineBreak");
     }
-    // Stop propagation so canvas shortcuts don't fire while typing
     e.stopPropagation();
   }, []);
 
@@ -69,7 +77,6 @@ export function TextLayerPreview({
         onKeyDown={isSelected ? handleKeyDown : undefined}
         onMouseDown={(e) => {
           if (isSelected) {
-            // When already editing, let the cursor be placed without starting a drag
             e.stopPropagation();
           }
         }}
@@ -96,9 +103,7 @@ export function TextLayerPreview({
           minWidth: "20px",
           caretColor: layer.fontColor,
         }}
-      >
-        {layer.text || "Your Text"}
-      </div>
+      />
     </div>
   );
 }

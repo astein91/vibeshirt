@@ -16,6 +16,7 @@ import {
   migrateDesignState,
   designStateToTransform,
 } from "@/lib/design-state";
+import { DEFAULT_PRODUCT_ID } from "@/lib/printful/products";
 
 interface Session {
   id: string;
@@ -24,6 +25,7 @@ interface Session {
   share_slug: string;
   vibe_description: string | null;
   design_state: unknown;
+  product_id: number | null;
 }
 
 interface PrintfulColor {
@@ -37,8 +39,6 @@ interface PrintfulColor {
 interface PageProps {
   params: Promise<{ sessionId: string }>;
 }
-
-const PRODUCT_ID = 71; // Bella+Canvas 3001
 
 export default function SharePage({ params }: PageProps) {
   const { sessionId: shareSlug } = use(params);
@@ -77,11 +77,13 @@ export default function SharePage({ params }: PageProps) {
     fetchSession();
   }, [shareSlug]);
 
+  const shareProductId = session?.product_id ?? DEFAULT_PRODUCT_ID;
+
   // Fetch product data for rendering
   useEffect(() => {
     async function fetchProduct() {
       try {
-        const response = await fetch(`/api/printful/products/${PRODUCT_ID}`);
+        const response = await fetch(`/api/printful/products/${shareProductId}`);
         if (response.ok) {
           const data = await response.json();
           setColors(data.colors || []);
@@ -97,7 +99,7 @@ export default function SharePage({ params }: PageProps) {
       }
     }
     fetchProduct();
-  }, []);
+  }, [shareProductId]);
 
   const sessionId = session?.id;
   const { artifacts, latestArtifact } = useArtifacts(sessionId || null);

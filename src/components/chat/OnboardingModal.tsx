@@ -44,7 +44,7 @@ const CAPABILITIES = [
 
 export function OnboardingModal({ open, onDismiss }: OnboardingModalProps) {
   return (
-    <Dialog open={open}>
+    <Dialog open={open} onOpenChange={(o) => !o && onDismiss()}>
       <DialogContent className="sm:max-w-sm bg-card border-border/50">
         <DialogHeader>
           <DialogTitle className="gradient-text text-xl font-extrabold italic">

@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Check, Loader2, Sparkles, Wand2, Package } from "lucide-react";
+import { Check, Loader2, Sparkles, Wand2, Package, ShoppingCart } from "lucide-react";
 
 type StepStatus = "completed" | "active" | "disabled";
 
@@ -22,16 +22,20 @@ interface WorkflowStepperProps {
   hasGenerated: boolean;
   hasNormalized: boolean;
   hasProduct: boolean;
+  hasOrdered?: boolean;
   isNormalizing?: boolean;
   isCreatingProduct?: boolean;
+  isOrdering?: boolean;
   onNormalize: () => void;
   onCreateProduct: () => void;
+  onOrder?: () => void;
 }
 
 const STEP_ICONS = [
   <Sparkles key="design" className="w-3.5 h-3.5" />,
   <Wand2 key="finalize" className="w-3.5 h-3.5" />,
   <Package key="product" className="w-3.5 h-3.5" />,
+  <ShoppingCart key="order" className="w-3.5 h-3.5" />,
 ];
 
 function deriveSteps({
@@ -39,10 +43,13 @@ function deriveSteps({
   hasGenerated,
   hasNormalized,
   hasProduct,
+  hasOrdered,
   isNormalizing,
   isCreatingProduct,
+  isOrdering,
   onNormalize,
   onCreateProduct,
+  onOrder,
 }: WorkflowStepperProps): WorkflowStep[] {
   const steps: WorkflowStep[] = [];
 
@@ -84,6 +91,22 @@ function deriveSteps({
     });
   } else {
     steps.push({ label: "Create Product", icon: STEP_ICONS[2], status: "disabled" });
+  }
+
+  // Step 4: Order
+  if (hasOrdered || sessionStatus === "ORDERED") {
+    steps.push({ label: "Order", icon: STEP_ICONS[3], status: "completed" });
+  } else if (hasProduct || sessionStatus === "PRODUCT_CREATED") {
+    steps.push({
+      label: "Order",
+      icon: STEP_ICONS[3],
+      status: "active",
+      action: isOrdering
+        ? { label: "Ordering...", onClick: () => {}, loading: true }
+        : { label: "Place Order", onClick: onOrder || (() => {}) },
+    });
+  } else {
+    steps.push({ label: "Order", icon: STEP_ICONS[3], status: "disabled" });
   }
 
   return steps;

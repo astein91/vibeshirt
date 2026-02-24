@@ -1,7 +1,6 @@
 import { getTextModel } from "@/lib/gemini/client";
 import { getPrintfulClient, type Variant, type ProductDetails } from "@/lib/printful/client";
-
-const PRODUCT_ID = 71; // Bella+Canvas 3001 on Printful
+import { DEFAULT_PRODUCT_ID } from "@/lib/printful/products";
 
 export interface PrintfulConfig {
   productId: number;
@@ -14,27 +13,29 @@ export interface PrintfulConfig {
 export interface VibeInput {
   vibeDescription: string;
   artworkDescription?: string;
+  productId?: number;
 }
 
-// In-memory cache for product data
-let cachedProduct: ProductDetails | null = null;
-let cachedProductAt = 0;
+// In-memory cache for product data (keyed by product ID)
+const productCache = new Map<number, { data: ProductDetails; at: number }>();
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-async function getProduct(): Promise<ProductDetails> {
-  if (cachedProduct && Date.now() - cachedProductAt < CACHE_TTL_MS) {
-    return cachedProduct;
+async function getProduct(productId: number): Promise<ProductDetails> {
+  const cached = productCache.get(productId);
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    return cached.data;
   }
   const client = getPrintfulClient();
-  cachedProduct = await client.getProduct(PRODUCT_ID);
-  cachedProductAt = Date.now();
-  return cachedProduct;
+  const data = await client.getProduct(productId);
+  productCache.set(productId, { data, at: Date.now() });
+  return data;
 }
 
 // Map user vibe to Printful configuration using LLM
 export async function mapVibeToConfig(input: VibeInput): Promise<PrintfulConfig> {
   const model = getTextModel();
-  const product = await getProduct();
+  const productId = input.productId ?? DEFAULT_PRODUCT_ID;
+  const product = await getProduct(productId);
   const variants = product.variants.filter((v) => v.in_stock);
 
   if (variants.length === 0) {
@@ -42,7 +43,7 @@ export async function mapVibeToConfig(input: VibeInput): Promise<PrintfulConfig>
   }
 
   if (!model) {
-    return createDefaultConfig(input, variants);
+    return createDefaultConfig(input, variants, productId);
   }
 
   try {
@@ -97,7 +98,7 @@ Respond in JSON format:
         : variants.slice(0, 10).map((v) => v.id);
 
     return {
-      productId: PRODUCT_ID,
+      productId,
       title: llmConfig.title || `Custom ${input.vibeDescription} Tee`,
       description:
         llmConfig.description ||
@@ -107,16 +108,17 @@ Respond in JSON format:
     };
   } catch (error) {
     console.error("[VibeMapper] LLM mapping failed:", error);
-    return createDefaultConfig(input, variants);
+    return createDefaultConfig(input, variants, productId);
   }
 }
 
 function createDefaultConfig(
   input: VibeInput,
-  variants: Variant[]
+  variants: Variant[],
+  productId: number
 ): PrintfulConfig {
   return {
-    productId: PRODUCT_ID,
+    productId,
     title: "Custom Design Tee",
     description: input.vibeDescription
       ? `A unique T-shirt with ${input.vibeDescription} vibes.`

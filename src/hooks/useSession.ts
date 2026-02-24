@@ -10,8 +10,11 @@ export interface Session {
   vibe_description: string | null;
   artwork_prompt: string | null;
   design_state: unknown;
+  product_id: number | null;
   printful_config: unknown;
   printful_product_id: string | null;
+  printful_order_id: string | null;
+  ordered_at: string | null;
   created_at: string;
   updated_at: string;
 }

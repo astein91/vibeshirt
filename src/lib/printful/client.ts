@@ -130,10 +130,31 @@ class PrintfulClient {
     );
   }
 
-  // Get a sync product from the store (requires store)
-  async getSyncProduct(id: number): Promise<SyncProduct> {
-    return this.request<SyncProduct>(
+  // Get a sync product from the store with full variant details (requires store)
+  async getSyncProduct(id: number): Promise<SyncProductDetails> {
+    return this.request<SyncProductDetails>(
       `/store/products/${id}`,
+      {},
+      true // requires store ID
+    );
+  }
+
+  // Create an order (draft mode by default) (requires store)
+  async createOrder(body: CreateOrderInput): Promise<PrintfulOrder> {
+    return this.request<PrintfulOrder>(
+      `/store/orders`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      true // requires store ID
+    );
+  }
+
+  // Get order status (requires store)
+  async getOrder(orderId: number): Promise<PrintfulOrder> {
+    return this.request<PrintfulOrder>(
+      `/store/orders/${orderId}`,
       {},
       true // requires store ID
     );
@@ -330,6 +351,80 @@ export interface SyncProduct {
   variants: number;
   synced: number;
   thumbnail_url: string | null;
+}
+
+export interface SyncVariantDetail {
+  id: number;                // sync_variant_id (assigned by Printful)
+  external_id: string;
+  sync_product_id: number;
+  name: string;
+  synced: boolean;
+  variant_id: number;        // catalog variant_id
+  retail_price: string;
+  currency: string;
+  product: {
+    variant_id: number;
+    product_id: number;
+    image: string;
+    name: string;
+  };
+}
+
+export interface SyncProductDetails {
+  sync_product: SyncProduct;
+  sync_variants: SyncVariantDetail[];
+}
+
+// Order types
+
+export interface OrderRecipient {
+  name: string;
+  address1: string;
+  city: string;
+  state_code: string;
+  country_code: string;
+  zip: string;
+  email: string;
+}
+
+export interface OrderItem {
+  sync_variant_id: number;
+  quantity: number;
+  retail_price: string;
+}
+
+export interface CreateOrderInput {
+  recipient: OrderRecipient;
+  items: OrderItem[];
+  confirm: boolean;
+  external_id?: string;
+}
+
+export interface PrintfulOrder {
+  id: number;
+  external_id: string;
+  status: string;
+  shipping: string;
+  created: number;
+  updated: number;
+  recipient: OrderRecipient;
+  items: Array<{
+    id: number;
+    external_id: string | null;
+    variant_id: number;
+    sync_variant_id: number;
+    quantity: number;
+    retail_price: string;
+    name: string;
+  }>;
+  retail_costs: {
+    currency: string;
+    subtotal: string;
+    discount: string;
+    shipping: string;
+    tax: string;
+    total: string;
+  };
 }
 
 // Singleton client instance

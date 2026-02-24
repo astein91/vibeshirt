@@ -18,6 +18,8 @@ import {
   type MultiSideDesignState,
   type Layer,
   DEFAULT_DESIGN_STATE,
+  MAX_SCALE,
+  MIN_SCALE,
   applyPositionCommand,
   designStateToTransform,
   updateLayerDesignState,
@@ -73,13 +75,13 @@ interface InteractiveCanvasProps {
   onRemoveLayer: (layerId: string) => void;
   onAddLayerRequest?: () => void;
   isLoading?: boolean;
+  productId: number;
   onColorChange?: (color: PrintfulColor) => void;
   onPrintAreaChange?: (printArea: PrintArea) => void;
+  onSizesChange?: (sizes: string[]) => void;
   mockupPreview?: MockupPreview | null;
   isMockupLoading?: boolean;
 }
-
-const PRODUCT_ID = 71; // Bella+Canvas 3001
 
 const FALLBACK_COLORS: PrintfulColor[] = [
   { name: "White", hex: "#FFFFFF", hex2: null, variantIds: [], image: "" },
@@ -106,8 +108,10 @@ export function InteractiveCanvas({
   onRemoveLayer,
   onAddLayerRequest,
   isLoading = false,
+  productId,
   onColorChange,
   onPrintAreaChange,
+  onSizesChange,
   mockupPreview,
   isMockupLoading = false,
 }: InteractiveCanvasProps) {
@@ -128,12 +132,14 @@ export function InteractiveCanvas({
   const hasFetchedInitialRef = useRef(false);
   const onPrintAreaChangeRef = useRef(onPrintAreaChange);
   const onColorChangeRef = useRef(onColorChange);
+  const onSizesChangeRef = useRef(onSizesChange);
   const draggedLayerIdRef = useRef<string | null>(null);
 
   // Keep refs up to date
   useEffect(() => {
     onPrintAreaChangeRef.current = onPrintAreaChange;
     onColorChangeRef.current = onColorChange;
+    onSizesChangeRef.current = onSizesChange;
   });
 
   // Sync view with multiState.activeSide
@@ -156,20 +162,18 @@ export function InteractiveCanvas({
     async function fetchProductData() {
       setLoadingProduct(true);
       try {
-        const response = await fetch(`/api/printful/products/${PRODUCT_ID}`);
+        const response = await fetch(`/api/printful/products/${productId}`);
         if (response.ok && !cancelled) {
           const data = await response.json();
           setProductData(data);
 
-          if (!hasFetchedInitialRef.current) {
-            const defaultColor =
-              data.colors.find((c: PrintfulColor) => c.name === "White") ||
-              data.colors.find((c: PrintfulColor) => c.name === "Black") ||
-              data.colors[0];
-            if (defaultColor) {
-              setSelectedColor(defaultColor);
-            }
-            hasFetchedInitialRef.current = true;
+          // Always reset color selection when product changes
+          const defaultColor =
+            data.colors.find((c: PrintfulColor) => c.name === "White") ||
+            data.colors.find((c: PrintfulColor) => c.name === "Black") ||
+            data.colors[0];
+          if (defaultColor) {
+            setSelectedColor(defaultColor);
           }
 
           const frontPrintArea = data.printAreas?.find(
@@ -177,6 +181,13 @@ export function InteractiveCanvas({
           );
           if (frontPrintArea) {
             onPrintAreaChangeRef.current?.(frontPrintArea);
+          }
+
+          // Notify parent of available sizes
+          if (data.sizes) {
+            onSizesChangeRef.current?.(
+              data.sizes.map((s: { name: string }) => s.name)
+            );
           }
         } else if (!cancelled) {
           setProductData(null);
@@ -198,7 +209,7 @@ export function InteractiveCanvas({
     return () => {
       cancelled = true;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [productId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Notify parent of color changes
   useEffect(() => {
@@ -282,13 +293,17 @@ export function InteractiveCanvas({
       const deltaX = ((e.clientX - dragStart.x) / rect.width) * 100;
       const deltaY = ((e.clientY - dragStart.y) / rect.height) * 100;
 
-      const newX = Math.min(100, Math.max(0, dragStart.stateX + deltaX));
-      const newY = Math.min(100, Math.max(0, dragStart.stateY + deltaY));
-
       const state = multiStateRef.current;
       const side = view === "mockup" ? state.activeSide : view;
       const layer = state[side].find((l) => l.id === draggedLayerIdRef.current);
       if (!layer) return;
+
+      // Constrain so design edges stay within the print area
+      const halfExtent = layer.designState.scale * 50;
+      const minPos = halfExtent;
+      const maxPos = 100 - halfExtent;
+      const newX = Math.min(Math.max(minPos, 50), Math.max(minPos, Math.min(maxPos, dragStart.stateX + deltaX)));
+      const newY = Math.min(Math.max(minPos, 50), Math.max(minPos, Math.min(maxPos, dragStart.stateY + deltaY)));
 
       onMultiStateChangeRef.current(
         updateLayerDesignState(state, side, draggedLayerIdRef.current, {
@@ -364,7 +379,7 @@ export function InteractiveCanvas({
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         const newDist = Math.hypot(dx, dy);
         const ratio = newDist / pinchStartDistRef.current;
-        const newScale = Math.min(3, Math.max(0.1, pinchStartScaleRef.current * ratio));
+        const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, pinchStartScaleRef.current * ratio));
 
         const state = multiStateRef.current;
         const side = view === "mockup" ? state.activeSide : view;
@@ -387,13 +402,17 @@ export function InteractiveCanvas({
       const deltaX = ((touch.clientX - dragStart.x) / rect.width) * 100;
       const deltaY = ((touch.clientY - dragStart.y) / rect.height) * 100;
 
-      const newX = Math.min(100, Math.max(0, dragStart.stateX + deltaX));
-      const newY = Math.min(100, Math.max(0, dragStart.stateY + deltaY));
-
       const state = multiStateRef.current;
       const side = view === "mockup" ? state.activeSide : view;
       const layer = state[side].find((l) => l.id === draggedLayerIdRef.current);
       if (!layer) return;
+
+      // Constrain so design edges stay within the print area
+      const halfExtent = layer.designState.scale * 50;
+      const minPos = halfExtent;
+      const maxPos = 100 - halfExtent;
+      const newX = Math.min(Math.max(minPos, 50), Math.max(minPos, Math.min(maxPos, dragStart.stateX + deltaX)));
+      const newY = Math.min(Math.max(minPos, 50), Math.max(minPos, Math.min(maxPos, dragStart.stateY + deltaY)));
 
       onMultiStateChangeRef.current(
         updateLayerDesignState(state, side, draggedLayerIdRef.current, {
@@ -430,7 +449,7 @@ export function InteractiveCanvas({
       if (!hitLayer) return;
 
       const factor = e.deltaY < 0 ? 1.05 : 0.95;
-      const newScale = Math.min(3, Math.max(0.1, hitLayer.designState.scale * factor));
+      const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, hitLayer.designState.scale * factor));
 
       const state = multiStateRef.current;
       const side = view === "mockup" ? state.activeSide : view;

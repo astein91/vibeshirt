@@ -85,6 +85,18 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     if (body.designState !== undefined) {
       updateData.design_state = body.designState;
     }
+    if (body.productId !== undefined) {
+      updateData.product_id = body.productId;
+    }
+    if (body.orderId !== undefined) {
+      updateData.printful_order_id = body.orderId;
+    }
+    if (body.orderRecipient !== undefined) {
+      updateData.order_recipient = body.orderRecipient;
+    }
+    if (body.orderedAt !== undefined) {
+      updateData.ordered_at = body.orderedAt;
+    }
 
     if (body.isPublic !== undefined) {
       updateData.is_public = body.isPublic;

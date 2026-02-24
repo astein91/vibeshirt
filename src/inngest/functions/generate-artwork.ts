@@ -19,10 +19,13 @@ export const generateArtwork = inngest.createFunction(
         .eq("id", jobId);
     });
 
-    // Generate the image
-    const result = await step.run("generate-image", async () => {
-      let enhancedPrompt = prompt;
+    // Generate, upload, and save in a single step to avoid
+    // passing large image buffers across step boundaries
+    // (Inngest has a step output size limit)
+    const genResult = await step.run("generate-and-upload", async () => {
+      const supabase = createServiceClient();
 
+      let enhancedPrompt = prompt;
       if (style && style !== "default") {
         enhancedPrompt = `${prompt}. Style: ${style}`;
       }
@@ -30,10 +33,9 @@ export const generateArtwork = inngest.createFunction(
       const options: GenerateImageOptions = {};
 
       if (sourceArtifactId) {
-        const supabase = createServiceClient();
         const { data: sourceArtifact } = await supabase
           .from("artifacts")
-          .select("*")
+          .select("storage_key")
           .eq("id", sourceArtifactId)
           .single();
 
@@ -49,12 +51,10 @@ export const generateArtwork = inngest.createFunction(
         }
       }
 
-      return generateImage(enhancedPrompt, options);
-    });
+      const result = await generateImage(enhancedPrompt, options);
 
-    if (!result.success || !result.imageData) {
-      await step.run("mark-failed", async () => {
-        const supabase = createServiceClient();
+      if (!result.success || !result.imageData) {
+        // Mark job as failed
         await supabase
           .from("jobs")
           .update({
@@ -69,24 +69,20 @@ export const generateArtwork = inngest.createFunction(
           author_name: "Tailor",
           content: `Sorry, I couldn't generate that image. ${result.error || "Please try a different description."}`,
         });
-      });
 
-      return { success: false, error: result.error };
-    }
+        return { success: false as const, error: result.error };
+      }
 
-    // Upload the image to storage
-    const artifact = await step.run("upload-and-save", async () => {
-      const supabase = createServiceClient();
+      // Upload image
       const storageKey = `generated/${sessionId}/${nanoid()}.png`;
-
       const imageBuffer = Buffer.isBuffer(result.imageData)
         ? result.imageData
-        : Buffer.from((result.imageData as { data: number[] }).data);
+        : Buffer.from(result.imageData);
 
       await uploadToStorage(storageKey, imageBuffer, result.mimeType || "image/png");
-
       const storageUrl = getPublicUrl(storageKey);
 
+      // Create artifact record
       const { data: artifact } = await supabase
         .from("artifacts")
         .insert({
@@ -112,8 +108,19 @@ export const generateArtwork = inngest.createFunction(
         artifact_id: artifact?.id ?? null,
       });
 
-      return artifact!;
+      // Return only metadata (no buffers!)
+      return {
+        success: true as const,
+        artifactId: artifact!.id,
+        storageUrl: artifact!.storage_url,
+      };
     });
+
+    if (!genResult.success) {
+      return { success: false, error: genResult.error };
+    }
+
+    const artifact = { id: genResult.artifactId, storage_url: genResult.storageUrl };
 
     // Mark job as completed
     await step.run("mark-completed", async () => {

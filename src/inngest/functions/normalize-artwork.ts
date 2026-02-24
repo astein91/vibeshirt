@@ -5,14 +5,6 @@ import { removeBackground, hasTransparentBackground } from "@/lib/image/backgrou
 import { uploadToStorage, getFromStorage, getPublicUrl } from "@/lib/storage/client";
 import { nanoid } from "nanoid";
 
-// Helper to ensure we have a proper Buffer from Inngest step serialization
-function toBuffer(data: Buffer | { type: string; data: number[] }): Buffer {
-  if (Buffer.isBuffer(data)) {
-    return data;
-  }
-  return Buffer.from(data.data);
-}
-
 export const normalizeArtwork = inngest.createFunction(
   { id: "normalize-artwork" },
   { event: "artwork/normalize" },
@@ -36,18 +28,18 @@ export const normalizeArtwork = inngest.createFunction(
         .eq("id", jobId);
     });
 
-    // Get the source artifact
-    const sourceArtifact = await step.run("get-source", async () => {
+    // Get the source artifact storage key
+    const sourceStorageKey = await step.run("get-source", async () => {
       const supabase = createServiceClient();
       const { data } = await supabase
         .from("artifacts")
-        .select("*")
+        .select("storage_key")
         .eq("id", artifactId)
         .single();
-      return data;
+      return data?.storage_key ?? null;
     });
 
-    if (!sourceArtifact) {
+    if (!sourceStorageKey) {
       await step.run("mark-failed-no-source", async () => {
         const supabase = createServiceClient();
         await supabase
@@ -61,66 +53,41 @@ export const normalizeArtwork = inngest.createFunction(
       return { success: false, error: "Source artifact not found" };
     }
 
-    // Download the source image
-    const sourceImageRaw = await step.run("download-source", async () => {
-      return getFromStorage(sourceArtifact.storage_key);
-    });
+    // Download, process, and upload in a single step to avoid
+    // passing large image buffers across step boundaries
+    // (Inngest has a step output size limit)
+    const result = await step.run("process-and-upload", async () => {
+      const supabase = createServiceClient();
 
-    const sourceImage = toBuffer(sourceImageRaw);
+      // Download source image
+      const sourceImage = await getFromStorage(sourceStorageKey);
 
-    // Process the image
-    let processedImage = sourceImage;
-
-    if (shouldRemoveBackground) {
-      const bgResult = await step.run("remove-background", async () => {
+      // Remove background if requested
+      let processedImage = sourceImage;
+      if (shouldRemoveBackground) {
         const alreadyTransparent = await hasTransparentBackground(sourceImage);
-
-        if (alreadyTransparent) {
-          console.log("[Normalize] Image already has transparent background");
-          return { changed: false };
+        if (!alreadyTransparent) {
+          const bgResult = await removeBackground(sourceImage);
+          if (bgResult.success && bgResult.imageData) {
+            processedImage = bgResult.imageData;
+          }
         }
-
-        const result = await removeBackground(sourceImage);
-        if (result.success && result.imageData) {
-          return { changed: true, data: result.imageData };
-        }
-        return { changed: false };
-      });
-
-      if (bgResult.changed && "data" in bgResult && bgResult.data) {
-        processedImage = toBuffer(bgResult.data);
       }
-    }
 
-    // Normalize for printing
-    const normalizedRaw = await step.run("normalize-image", async () => {
-      const result = await normalizeForPrint(processedImage, {
+      // Normalize for printing
+      const normalized = await normalizeForPrint(processedImage, {
         targetWidth,
         targetHeight,
         targetDpi,
         maintainAspectRatio: true,
       });
-      return {
-        buffer: result.buffer,
-        width: result.width,
-        height: result.height,
-        dpi: result.dpi,
-        format: result.format,
-        hasAlpha: result.hasAlpha,
-      };
-    });
 
-    const normalizedBuffer = toBuffer(normalizedRaw.buffer);
-
-    // Upload the normalized image
-    const artifact = await step.run("upload-normalized", async () => {
-      const supabase = createServiceClient();
+      // Upload normalized image
       const storageKey = `normalized/${sessionId}/${nanoid()}.png`;
-
-      await uploadToStorage(storageKey, normalizedBuffer, "image/png");
-
+      await uploadToStorage(storageKey, normalized.buffer, "image/png");
       const storageUrl = getPublicUrl(storageKey);
 
+      // Create artifact record
       const { data: artifact } = await supabase
         .from("artifacts")
         .insert({
@@ -129,11 +96,11 @@ export const normalizeArtwork = inngest.createFunction(
           storage_url: storageUrl,
           storage_key: storageKey,
           metadata: {
-            width: normalizedRaw.width,
-            height: normalizedRaw.height,
-            dpi: normalizedRaw.dpi,
-            format: normalizedRaw.format,
-            hasTransparency: normalizedRaw.hasAlpha,
+            width: normalized.width,
+            height: normalized.height,
+            dpi: normalized.dpi,
+            format: normalized.format,
+            hasTransparency: normalized.hasAlpha,
             normalizedAt: new Date().toISOString(),
           },
           source_artifact_id: artifactId,
@@ -141,12 +108,20 @@ export const normalizeArtwork = inngest.createFunction(
         .select()
         .single();
 
+      // Update session status
       await supabase
         .from("design_sessions")
         .update({ status: "NORMALIZED" })
         .eq("id", sessionId);
 
-      return artifact!;
+      // Return only metadata (no buffers!)
+      return {
+        artifactId: artifact!.id,
+        storageUrl,
+        width: normalized.width,
+        height: normalized.height,
+        dpi: normalized.dpi,
+      };
     });
 
     // Mark job as completed
@@ -156,13 +131,7 @@ export const normalizeArtwork = inngest.createFunction(
         .from("jobs")
         .update({
           status: "COMPLETED",
-          output: {
-            artifactId: artifact.id,
-            storageUrl: artifact.storage_url,
-            width: normalizedRaw.width,
-            height: normalizedRaw.height,
-            dpi: normalizedRaw.dpi,
-          },
+          output: result,
         })
         .eq("id", jobId);
 
@@ -170,15 +139,15 @@ export const normalizeArtwork = inngest.createFunction(
         session_id: sessionId,
         role: "assistant",
         author_name: "Tailor",
-        content: `Your design is now print-ready! It's been optimized to ${normalizedRaw.width}x${normalizedRaw.height} pixels at ${normalizedRaw.dpi} DPI.`,
-        artifact_id: artifact.id,
+        content: `Your design is now print-ready! It's been optimized to ${result.width}x${result.height} pixels at ${result.dpi} DPI.`,
+        artifact_id: result.artifactId,
       });
     });
 
     return {
       success: true,
-      artifactId: artifact.id,
-      storageUrl: artifact.storage_url,
+      artifactId: result.artifactId,
+      storageUrl: result.storageUrl,
     };
   }
 );

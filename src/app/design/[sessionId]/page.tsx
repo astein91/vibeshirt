@@ -11,6 +11,7 @@ import { ChatContainer } from "@/components/chat/ChatContainer";
 import { OnboardingModal } from "@/components/chat/OnboardingModal";
 import { InteractiveCanvas } from "@/components/design/InteractiveCanvas";
 import { WorkflowStepper } from "@/components/design/WorkflowStepper";
+import { CheckoutModal } from "@/components/design/CheckoutModal";
 import { ShareButton } from "@/components/share/ShareButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,13 +26,13 @@ import {
   removeLayerFromSide,
   updateLayerDesignState,
 } from "@/lib/design-state";
+import { DEFAULT_PRODUCT_ID, type FitType, PRODUCTS, getFit } from "@/lib/printful/products";
 
 interface PageProps {
   params: Promise<{ sessionId: string }>;
 }
 
 const DEFAULT_USER_NAME = "You";
-const PRODUCT_ID = 71; // Bella+Canvas 3001
 const getDesignStateKey = (sessionId: string) => `vibeshirt-design-state-${sessionId}`;
 const getNuxDismissedKey = (sessionId: string) => `vibeshirt-nux-${sessionId}`;
 
@@ -45,8 +46,11 @@ export default function DesignSessionPage({ params }: PageProps) {
   });
   const [selectedColor, setSelectedColor] = useState<{ name: string; hex: string } | null>(null);
   const [printArea, setPrintArea] = useState<{ placement: string; title: string; width: number; height: number; dpi: number } | null>(null);
+  const [availableSizes, setAvailableSizes] = useState<string[]>([]);
+  const [productId, setProductId] = useState<number>(DEFAULT_PRODUCT_ID);
   const [isNormalizing, setIsNormalizing] = useState(false);
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
+  const [showCheckout, setShowCheckout] = useState(false);
   const [showNux, setShowNux] = useState(false);
 
   const vibeAutoSentRef = useRef(false);
@@ -85,6 +89,13 @@ export default function DesignSessionPage({ params }: PageProps) {
       const migrated = migrateDesignState(session.design_state);
       setMultiState(migrated);
       initialLoadDoneRef.current = true;
+    }
+  }, [session]);
+
+  // Sync productId from session
+  useEffect(() => {
+    if (session?.product_id) {
+      setProductId(session.product_id);
     }
   }, [session]);
 
@@ -140,7 +151,7 @@ export default function DesignSessionPage({ params }: PageProps) {
 
     let newState = multiState;
     for (const artifact of newArtifacts) {
-      if (artifact.type !== "GENERATED" && artifact.type !== "NORMALIZED") continue;
+      if (artifact.type !== "GENERATED") continue;
       // Check if already a layer
       const alreadyLayer = [...newState.front, ...newState.back].some(
         (l) => l.artifactId === artifact.id
@@ -208,18 +219,17 @@ export default function DesignSessionPage({ params }: PageProps) {
     if (
       latestNormalized &&
       latestNormalized.id !== mockupGeneratedForRef.current &&
-      PRODUCT_ID &&
       !isMockupGenerating
     ) {
       mockupGeneratedForRef.current = latestNormalized.id;
       generateMockup({
-        productId: PRODUCT_ID,
+        productId,
         variantIds: [],
         imageUrl: latestNormalized.storage_url,
         placement: "front",
       });
     }
-  }, [latestNormalized, PRODUCT_ID, isMockupGenerating, generateMockup]);
+  }, [latestNormalized, productId, isMockupGenerating, generateMockup]);
 
   const handleDismissNux = () => {
     setShowNux(false);
@@ -265,6 +275,17 @@ export default function DesignSessionPage({ params }: PageProps) {
     await makePublic();
   };
 
+  const handleFitChange = async (fit: FitType) => {
+    const newProductId = PRODUCTS[fit].id;
+    setProductId(newProductId);
+    // Persist to DB
+    fetch(`/api/sessions/${sessionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productId: newProductId }),
+    }).catch(() => {});
+  };
+
   const handleNormalize = async () => {
     if (!latestArtifact) return;
     setIsNormalizing(true);
@@ -298,7 +319,11 @@ export default function DesignSessionPage({ params }: PageProps) {
   };
 
   const handleCreateProduct = async () => {
-    if (!latestArtifact) return;
+    if (!latestArtifact) {
+      console.error("[CreateProduct] No latestArtifact available");
+      return;
+    }
+    console.log("[CreateProduct] Starting with artifact:", latestArtifact.id);
     setIsCreatingProduct(true);
 
     try {
@@ -308,17 +333,20 @@ export default function DesignSessionPage({ params }: PageProps) {
         body: JSON.stringify({
           vibeDescription: session?.vibe_description || "custom design",
           artworkDescription: latestArtifact.prompt,
+          productId,
         }),
       });
 
       if (!configResponse.ok) {
-        console.error("Failed to map vibe");
+        const err = await configResponse.text();
+        console.error("[CreateProduct] map-vibe failed:", configResponse.status, err);
         return;
       }
 
       const config = await configResponse.json();
+      console.log("[CreateProduct] Config mapped, creating product...");
 
-      await fetch("/api/printful/create-product", {
+      const productResponse = await fetch("/api/printful/create-product", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -328,6 +356,15 @@ export default function DesignSessionPage({ params }: PageProps) {
           multiState,
         }),
       });
+
+      if (!productResponse.ok) {
+        const err = await productResponse.text();
+        console.error("[CreateProduct] create-product failed:", productResponse.status, err);
+      } else {
+        console.log("[CreateProduct] Product created successfully");
+      }
+    } catch (err) {
+      console.error("[CreateProduct] Error:", err);
     } finally {
       setTimeout(() => setIsCreatingProduct(false), 5000);
     }
@@ -375,6 +412,11 @@ export default function DesignSessionPage({ params }: PageProps) {
           </Link>
         </div>
         <div className="flex items-center gap-2">
+          <Link href="/my-projects">
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
+              My Designs
+            </Button>
+          </Link>
           <Link href="/">
             <Button variant="outline" size="sm" className="border-neon-cyan/30 text-neon-cyan hover:bg-neon-cyan/10 hover:border-neon-cyan/50">
               + New Design
@@ -395,25 +437,48 @@ export default function DesignSessionPage({ params }: PageProps) {
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         {/* Design preview panel */}
         <div className="lg:w-1/2 border-b lg:border-b-0 lg:border-r border-border/50 p-6 flex flex-col overflow-auto synthwave-grid">
-          {/* Workflow Stepper */}
-          <div className="mb-4">
+          {/* Workflow Stepper + Fit Selector */}
+          <div className="mb-4 space-y-3">
             <WorkflowStepper
               sessionStatus={session.status}
               hasGenerated={!!latestGenerated}
               hasNormalized={!!latestNormalized}
               hasProduct={!!session.printful_product_id}
+              hasOrdered={session.status === "ORDERED"}
               isNormalizing={isNormalizing}
               isCreatingProduct={isCreatingProduct}
               onNormalize={handleNormalize}
               onCreateProduct={handleCreateProduct}
+              onOrder={() => setShowCheckout(true)}
             />
+            {/* Fit Selector */}
+            <div className="flex justify-center">
+              <div className="inline-flex rounded-lg border border-border/50 bg-card/50 p-0.5">
+                {(Object.entries(PRODUCTS) as [FitType, { id: number; label: string }][]).map(
+                  ([fit, { id, label }]) => (
+                    <button
+                      key={fit}
+                      onClick={() => handleFitChange(fit)}
+                      className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
+                        productId === id
+                          ? "bg-neon-purple/20 text-neon-purple border border-neon-purple/30"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  )
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="flex-1 flex items-center justify-center">
             <InteractiveCanvas
+              productId={productId}
               multiState={multiState}
               allArtifacts={artifacts
-                .filter((a) => a.type === "GENERATED" || a.type === "NORMALIZED")
+                .filter((a) => a.type === "GENERATED")
                 .map((a) => ({
                   id: a.id,
                   type: a.type,
@@ -426,6 +491,7 @@ export default function DesignSessionPage({ params }: PageProps) {
               isLoading={artifactsLoading}
               onColorChange={(color) => setSelectedColor(color)}
               onPrintAreaChange={(area) => setPrintArea(area)}
+              onSizesChange={(sizes) => setAvailableSizes(sizes)}
               mockupPreview={
                 mockups?.[0]
                   ? { imageUrl: mockups[0].imageUrl, placement: mockups[0].placement }
@@ -467,6 +533,18 @@ export default function DesignSessionPage({ params }: PageProps) {
 
       {/* NUX capabilities overlay */}
       <OnboardingModal open={showNux} onDismiss={handleDismissNux} />
+
+      {/* Checkout modal */}
+      {session.printful_product_id != null && session.printful_config != null ? (
+        <CheckoutModal
+          open={showCheckout}
+          onClose={() => setShowCheckout(false)}
+          sessionId={sessionId}
+          config={session.printful_config as { productId: number; title: string; description: string; variantIds: number[]; retailPrice: number }}
+          selectedColor={selectedColor}
+          sizes={availableSizes}
+        />
+      ) : null}
     </div>
   );
 }

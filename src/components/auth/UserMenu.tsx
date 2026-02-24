@@ -46,7 +46,9 @@ export function UserMenu() {
         onClick={() =>
           supabase.auth.signInWithOAuth({
             provider: "google",
-            options: { redirectTo: `${location.origin}/api/auth/callback` },
+            options: {
+              redirectTo: `${location.origin}/api/auth/callback?next=${encodeURIComponent(location.pathname)}`,
+            },
           })
         }
       >

@@ -107,7 +107,7 @@ export function PhotoMockup({
       {/* Design overlay area */}
       {children && (
         <div
-          className="absolute pointer-events-none"
+          className="absolute pointer-events-none overflow-hidden"
           style={{
             top: `${printArea.top}%`,
             left: `${printArea.left}%`,

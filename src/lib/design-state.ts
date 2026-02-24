@@ -54,10 +54,15 @@ export interface CanvasState {
 export const DEFAULT_DESIGN_STATE: DesignState = {
   x: 50,
   y: 50,
-  scale: 1,
+  scale: 0.65,
   rotation: 0,
   lockAspectRatio: true,
 };
+
+// Maximum allowed scale — prevents design from bleeding off the print area
+export const MAX_SCALE = 1.2;
+// Minimum allowed scale
+export const MIN_SCALE = 0.1;
 
 // Default product config (Bella+Canvas 3001)
 export const DEFAULT_PRODUCT_CONFIG: ProductConfig = {
@@ -111,12 +116,12 @@ export function applyPositionCommand(
         newState.x = 70;
         break;
       case "fill":
-        newState.scale = Math.min(state.scale * 1.5, 2);
+        newState.scale = Math.min(state.scale * 1.5, MAX_SCALE);
         newState.x = 50;
         newState.y = 50;
         break;
       case "fit":
-        newState.scale = Math.max(state.scale * 0.8, 0.3);
+        newState.scale = Math.max(state.scale * 0.8, MIN_SCALE);
         newState.x = 50;
         newState.y = 50;
         break;
@@ -132,7 +137,7 @@ export function applyPositionCommand(
     case "scale":
       if (command.scale !== undefined) {
         // Apply as multiplier to current scale
-        newState.scale = clamp(state.scale * command.scale, 0.1, 3);
+        newState.scale = clamp(state.scale * command.scale, MIN_SCALE, MAX_SCALE);
       }
       break;
     case "rotate":

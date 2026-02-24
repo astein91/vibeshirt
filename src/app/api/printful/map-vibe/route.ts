@@ -16,6 +16,7 @@ export async function POST(request: NextRequest) {
     const config = await mapVibeToConfig({
       vibeDescription: body.vibeDescription,
       artworkDescription: body.artworkDescription,
+      productId: body.productId,
     });
 
     return NextResponse.json(config);

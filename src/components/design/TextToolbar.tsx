@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { type TextLayer } from "@/lib/design-state";
 import { FONTS } from "@/lib/fonts";
 import { Button } from "@/components/ui/button";
@@ -28,11 +28,19 @@ const PRESET_COLORS = [
 
 export function TextToolbar({ layer, onUpdate, onDelete }: TextToolbarProps) {
   const [showFonts, setShowFonts] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-focus textarea when toolbar appears
+  useEffect(() => {
+    textareaRef.current?.focus();
+    textareaRef.current?.select();
+  }, []);
 
   return (
     <div className="bg-card border border-border rounded-xl shadow-lg p-3 space-y-3 w-full max-w-lg mx-auto">
       {/* Text input */}
       <textarea
+        ref={textareaRef}
         value={layer.text}
         onChange={(e) => onUpdate({ text: e.target.value })}
         placeholder="Enter text..."

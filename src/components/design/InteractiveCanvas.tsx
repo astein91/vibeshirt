@@ -291,6 +291,10 @@ export function InteractiveCanvas({
   );
 
   // Drag handlers
+  // Track if this was a click (no significant movement) vs a drag
+  const didDragRef = useRef(false);
+  const pendingSelectRef = useRef<string | null>(null);
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (!hasLayers) return;
@@ -302,10 +306,8 @@ export function InteractiveCanvas({
         return;
       }
 
-      // Select text layers on click
-      if (isTextLayer(hitLayer)) {
-        onSelectLayer?.(hitLayer.id);
-      }
+      didDragRef.current = false;
+      pendingSelectRef.current = isTextLayer(hitLayer) ? hitLayer.id : null;
 
       draggedLayerIdRef.current = hitLayer.id;
       setIsDragging(true);
@@ -322,6 +324,13 @@ export function InteractiveCanvas({
   const handleMouseMove = useCallback(
     (e: MouseEvent) => {
       if (!isDragging || !designAreaRef.current || !draggedLayerIdRef.current) return;
+
+      // Mark as a real drag if mouse moved more than 3px
+      const dx = e.clientX - dragStart.x;
+      const dy = e.clientY - dragStart.y;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        didDragRef.current = true;
+      }
 
       const rect = designAreaRef.current.getBoundingClientRect();
       const deltaX = ((e.clientX - dragStart.x) / rect.width) * 100;
@@ -351,9 +360,14 @@ export function InteractiveCanvas({
   );
 
   const handleMouseUp = useCallback(() => {
+    // If the user clicked without dragging, select the text layer
+    if (!didDragRef.current && pendingSelectRef.current) {
+      onSelectLayer?.(pendingSelectRef.current);
+    }
+    pendingSelectRef.current = null;
     setIsDragging(false);
     draggedLayerIdRef.current = null;
-  }, []);
+  }, [onSelectLayer]);
 
   useEffect(() => {
     if (isDragging) {
@@ -678,9 +692,9 @@ export function InteractiveCanvas({
                       </div>
                     );
                   })}
-                  {/* Drag hint */}
+                  {/* Drag hint — pointer-events-none so it doesn't block text layer clicks */}
                   {!isDragging && (
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity z-50">
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity z-50 pointer-events-none">
                       <div className="bg-black/50 rounded-full p-2">
                         <Move className="w-5 h-5 text-white" />
                       </div>
@@ -689,20 +703,12 @@ export function InteractiveCanvas({
                 </div>
               ) : (
                 <div className="flex items-center justify-center w-full h-full text-muted-foreground/40">
-                  <div className="text-center space-y-2">
+                  <div className="text-center">
                     <p className="text-sm font-medium">Design Area</p>
                     {frontPrintArea && (
-                      <p className="text-xs">
+                      <p className="text-xs mt-1">
                         {frontPrintArea.width} x {frontPrintArea.height}px
                       </p>
-                    )}
-                    {onAddTextLayer && (
-                      <button
-                        onClick={onAddTextLayer}
-                        className="inline-flex items-center gap-1 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
-                      >
-                        <Type className="w-3 h-3" /> Add text
-                      </button>
                     )}
                   </div>
                 </div>
@@ -725,6 +731,17 @@ export function InteractiveCanvas({
             </div>
           );
         })()}
+
+        {/* Floating add-text button */}
+        {onAddTextLayer && currentSideLayers.length < MAX_LAYERS_PER_SIDE && (
+          <button
+            onClick={onAddTextLayer}
+            className="absolute bottom-3 right-3 z-10 w-8 h-8 rounded-lg bg-background/80 hover:bg-background border border-border/50 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors shadow-sm"
+            title="Add text layer"
+          >
+            <Type className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Layer indicator panel */}

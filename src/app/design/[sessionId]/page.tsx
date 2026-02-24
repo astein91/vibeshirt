@@ -368,7 +368,9 @@ export default function DesignSessionPage({ params }: PageProps) {
         <div className="flex items-center gap-4">
           <Link href="/" className="flex items-center gap-2">
             <Image src="/logo.png" alt="Vibeshirting" width={28} height={28} className="rounded" />
-            <Image src="/wordmark.png" alt="Vibeshirting" width={120} height={28} className="object-contain" />
+            <span className="text-lg font-extrabold italic bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text text-transparent">
+              Vibeshirting
+            </span>
           </Link>
         </div>
         <div className="flex items-center gap-2">

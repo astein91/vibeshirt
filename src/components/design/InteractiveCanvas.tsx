@@ -143,6 +143,10 @@ export function InteractiveCanvas({
   const pinchStartDistRef = useRef(0);
   const pinchStartScaleRef = useRef(1);
 
+  // Resize handle state
+  const isResizingRef = useRef(false);
+  const resizeStartRef = useRef<{ clientX: number; clientY: number; startScale: number; layerId: string } | null>(null);
+
   const designAreaRef = useRef<HTMLDivElement>(null);
   const hasFetchedInitialRef = useRef(false);
   const onPrintAreaChangeRef = useRef(onPrintAreaChange);
@@ -416,7 +420,13 @@ export function InteractiveCanvas({
 
       const touch = e.touches[0];
       const hitLayer = hitTestLayer(touch.clientX, touch.clientY);
-      if (!hitLayer) return;
+      if (!hitLayer) {
+        onSelectLayer?.(null);
+        return;
+      }
+
+      didDragRef.current = false;
+      pendingSelectRef.current = hitLayer.id;
 
       draggedLayerIdRef.current = hitLayer.id;
       setIsDragging(true);
@@ -427,7 +437,7 @@ export function InteractiveCanvas({
         stateY: hitLayer.designState.y,
       });
     },
-    [hasLayers, hitTestLayer, view]
+    [hasLayers, hitTestLayer, view, onSelectLayer]
   );
 
   const handleTouchMove = useCallback(
@@ -457,6 +467,13 @@ export function InteractiveCanvas({
 
       if (!isDragging || !draggedLayerIdRef.current) return;
       const touch = e.touches[0];
+
+      // Mark as a real drag if finger moved more than 5px
+      const tdx = touch.clientX - dragStart.x;
+      const tdy = touch.clientY - dragStart.y;
+      if (Math.abs(tdx) > 5 || Math.abs(tdy) > 5) {
+        didDragRef.current = true;
+      }
 
       const rect = designAreaRef.current.getBoundingClientRect();
       const deltaX = ((touch.clientX - dragStart.x) / rect.width) * 100;
@@ -491,11 +508,16 @@ export function InteractiveCanvas({
         isPinchingRef.current = false;
       }
       if (e.touches.length === 0) {
+        // If the user tapped without dragging, select the layer
+        if (!didDragRef.current && pendingSelectRef.current) {
+          onSelectLayer?.(pendingSelectRef.current);
+        }
+        pendingSelectRef.current = null;
         setIsDragging(false);
         draggedLayerIdRef.current = null;
       }
     },
-    []
+    [onSelectLayer]
   );
 
   // Scroll-wheel zoom (desktop) - zooms layer under cursor
@@ -525,6 +547,65 @@ export function InteractiveCanvas({
     el.addEventListener("wheel", handleWheel, { passive: false });
     return () => el.removeEventListener("wheel", handleWheel);
   }, [hasLayers, hitTestLayer, view]);
+
+  // Resize handle interactions
+  const handleResizePointerDown = useCallback(
+    (e: React.PointerEvent, layerId: string) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const state = multiStateRef.current;
+      const side = view === "mockup" ? state.activeSide : view;
+      const layer = state[side].find((l) => l.id === layerId);
+      if (!layer) return;
+
+      isResizingRef.current = true;
+      resizeStartRef.current = {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        startScale: layer.designState.scale,
+        layerId,
+      };
+
+      const el = designAreaRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      // Layer center in viewport coords
+      const centerX = rect.left + (layer.designState.x / 100) * rect.width;
+      const centerY = rect.top + (layer.designState.y / 100) * rect.height;
+      const startDist = Math.hypot(e.clientX - centerX, e.clientY - centerY);
+
+      const handlePointerMove = (ev: PointerEvent) => {
+        if (!isResizingRef.current || !resizeStartRef.current) return;
+        const newDist = Math.hypot(ev.clientX - centerX, ev.clientY - centerY);
+        if (startDist < 1) return;
+        const ratio = newDist / startDist;
+        const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, resizeStartRef.current.startScale * ratio));
+
+        const state = multiStateRef.current;
+        const side = view === "mockup" ? state.activeSide : view;
+        const layer = state[side].find((l) => l.id === resizeStartRef.current!.layerId);
+        if (!layer) return;
+
+        onMultiStateChangeRef.current(
+          updateLayerDesignState(state, side, resizeStartRef.current.layerId, {
+            ...layer.designState,
+            scale: newScale,
+          })
+        );
+      };
+
+      const handlePointerUp = () => {
+        isResizingRef.current = false;
+        resizeStartRef.current = null;
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", handlePointerUp);
+      };
+
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerUp);
+    },
+    [view]
+  );
 
   // Quick controls operate on all layers on active side
   const handleCenter = () => {
@@ -683,6 +764,7 @@ export function InteractiveCanvas({
                     }
                     const artifact = isImageLayer(layer) ? getArtifactForLayer(layer, allArtifacts) : undefined;
                     if (!artifact) return null;
+                    const isSelected = selectedLayerId === layer.id;
                     return (
                       <div
                         key={layer.id}
@@ -695,6 +777,9 @@ export function InteractiveCanvas({
                           zIndex: layer.zIndex,
                         }}
                       >
+                        {isSelected && (
+                          <div className="absolute inset-0 border-2 border-dashed border-primary/60 rounded pointer-events-none z-10" />
+                        )}
                         <Image
                           src={artifact.storage_url}
                           alt={artifact.prompt || "Design"}
@@ -702,6 +787,26 @@ export function InteractiveCanvas({
                           className="object-contain pointer-events-none select-none"
                           draggable={false}
                         />
+                        {isSelected && (
+                          <>
+                            {/* Corner resize handles */}
+                            {[
+                              "top-0 left-0 -translate-x-1/2 -translate-y-1/2",
+                              "top-0 right-0 translate-x-1/2 -translate-y-1/2",
+                              "bottom-0 left-0 -translate-x-1/2 translate-y-1/2",
+                              "bottom-0 right-0 translate-x-1/2 translate-y-1/2",
+                            ].map((pos, i) => (
+                              <div
+                                key={i}
+                                className={cn(
+                                  "absolute w-6 h-6 rounded-full bg-white border-2 border-primary shadow-md z-20 cursor-nwse-resize touch-none",
+                                  pos
+                                )}
+                                onPointerDown={(e) => handleResizePointerDown(e, layer.id)}
+                              />
+                            ))}
+                          </>
+                        )}
                       </div>
                     );
                   })}
@@ -813,7 +918,13 @@ export function InteractiveCanvas({
             if (!artifact) return null;
             return (
               <div key={layer.id} className="relative group">
-                <div className="w-10 h-10 rounded border-2 border-muted overflow-hidden">
+                <button
+                  onClick={() => onSelectLayer?.(selectedLayerId === layer.id ? null : layer.id)}
+                  className={cn(
+                    "w-10 h-10 rounded border-2 overflow-hidden",
+                    selectedLayerId === layer.id ? "border-primary ring-1 ring-primary/30" : "border-muted"
+                  )}
+                >
                   <Image
                     src={artifact.storage_url}
                     alt=""
@@ -821,7 +932,7 @@ export function InteractiveCanvas({
                     height={40}
                     className="object-cover w-full h-full"
                   />
-                </div>
+                </button>
                 <button
                   onClick={() => onRemoveLayer(layer.id)}
                   className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-destructive text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
